@@ -1,0 +1,1 @@
+/Users/vinil_polepalli/conductor/repos/clarity/.claude/skills/gstack/setup-deploy/SKILL.md

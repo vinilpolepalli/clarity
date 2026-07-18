@@ -1,0 +1,1 @@
+/Users/vinil_polepalli/conductor/repos/clarity/.claude/skills/gstack/ios-clean/SKILL.md
