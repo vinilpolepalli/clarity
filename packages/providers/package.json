@@ -1,0 +1,11 @@
+{
+  "name": "@clarity/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": {
+    "build": "node --check src/index.mjs",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 src/index.mjs"
+  }
+}

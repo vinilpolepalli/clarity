@@ -1,0 +1,75 @@
+{
+  "name": "@clarity/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A private, local-first meeting copilot for macOS",
+  "author": "Clarity Contributors",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "build": "vite build",
+    "dev": "node scripts/dev.mjs",
+    "demo": "pnpm build && CLARITY_DEMO=1 electron .",
+    "e2e": "pnpm build && playwright test",
+    "package:mac": "electron-builder --mac --publish never",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clarity/capture-client": "workspace:*",
+    "@clarity/domain": "workspace:*",
+    "@clarity/providers": "workspace:*",
+    "@clarity/windowing": "workspace:*",
+    "lucide-react": "0.468.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.4",
+    "electron": "43.1.1",
+    "electron-builder": "26.8.1",
+    "vite": "7.3.6",
+    "wait-on": "9.0.4"
+  },
+  "build": {
+    "appId": "app.clarity.desktop",
+    "productName": "Clarity",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "../../packages/domain/src/**/*",
+      "../../packages/windowing/src/**/*",
+      "!**/.turbo/**",
+      "!**/*.test.*"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "target": ["dmg", "zip"],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Clarity uses the microphone only while you visibly start listening.",
+        "NSScreenCaptureUsageDescription": "Clarity uses Screen Recording permission for meeting system audio. Screen pixels are not stored by default."
+      }
+    },
+    "extraResources": [
+      {
+        "from": "../../native/ClarityCapture/.build/release/ClarityCapture",
+        "to": "native/ClarityCapture"
+      }
+    ],
+    "dmg": {
+      "sign": false
+    }
+  }
+}
