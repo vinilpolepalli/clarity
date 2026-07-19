@@ -1,0 +1,16 @@
+node_modules/
+dist/
+release/
+coverage/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.turbo/
+apps/desktop/dist/
+apps/desktop/release/
+native/ClarityCapture/.build/
+apps/desktop/build/icon.iconset/
