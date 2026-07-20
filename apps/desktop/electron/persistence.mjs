@@ -28,7 +28,7 @@ export class PreferenceStore {
   }
 
   update(patch) {
-    const operation = this.writeQueue.then(async () => {
+    const operation = this.writeQueue.catch(() => {}).then(async () => {
       const candidate = mergePreferences({ ...this.value, ...patch });
       const payload = `${JSON.stringify(candidate, null, 2)}\n`;
       await this.mkdir(dirname(this.path), { recursive: true });

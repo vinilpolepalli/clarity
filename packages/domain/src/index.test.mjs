@@ -6,6 +6,7 @@ import {
   CLARITY_BASE_PROMPT,
   createInitialOverlayState,
   createModeModel,
+  DEFAULT_PROVIDER_MODELS,
   demoResponse,
   isModeId,
   mergePreferences,
@@ -62,6 +63,22 @@ describe("overlay reducer", () => {
     expect(reduceOverlay(state, { type: "COLLAPSE" }).phase).toBe("compact-listening");
   });
 
+  it("keeps screen opt-in across clear while dropping attachment metadata", () => {
+    let state = createInitialOverlayState(true, true);
+    state = reduceOverlay(state, { type: "SUBMIT", prompt: "screen", requestId: "current" });
+    state = reduceOverlay(state, { type: "SCREEN_CAPTURE_ATTACHED", requestId: "current", attachmentId: "image-1", capturedAt: 10, displayId: "2" });
+    state = reduceOverlay(state, { type: "CLEAR" });
+    expect(state.screenContext.enabled).toBe(true);
+    expect(state.screenContext.status).toBe("idle");
+    expect(state.screenContext.attachmentId).toBeNull();
+  });
+
+  it("ignores stale screen capture completions", () => {
+    let state = reduceOverlay(createInitialOverlayState(true, true), { type: "SUBMIT", prompt: "screen", requestId: "current" });
+    state = reduceOverlay(state, { type: "SCREEN_CAPTURE_ATTACHED", requestId: "old", attachmentId: "wrong" });
+    expect(state.screenContext.attachmentId).toBeNull();
+  });
+
   it("starts a new chat without collapsing the expanded overlay", () => {
     let state = reduceOverlay(createInitialOverlayState(true), { type: "SUBMIT", prompt: "hello", requestId: "one" });
     state = reduceOverlay(state, { type: "RESOLVE", requestId: "one", response: "Hi" });
@@ -94,7 +111,12 @@ describe("overlay reducer", () => {
 
 describe("portable contracts", () => {
   it("migrates partial preferences to version one", () => {
-    expect(mergePreferences({ reduceMotion: true }).keybindings.toggleOverlay).toContain("Shift");
+    const preferences = mergePreferences({ reduceMotion: true });
+    expect(preferences.keybindings.toggleOverlay).toContain("Shift");
+    expect(preferences.screenContextEnabled).toBe(false);
+    expect(preferences.imageInputOverrides).toEqual({});
+    expect(preferences.customModels.nvidia).toEqual([]);
+    expect(DEFAULT_PROVIDER_MODELS.nvidia).toBe("deepseek-ai/deepseek-v4-flash");
   });
 
   it("normalizes saved custom provider models", () => {

@@ -76,7 +76,11 @@ importers:
 
   packages/domain: {}
 
-  packages/providers: {}
+  packages/providers:
+    dependencies:
+      '@clarity/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/sync-client: {}
 

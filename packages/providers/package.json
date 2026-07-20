@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.mjs",
+  "dependencies": {
+    "@clarity/domain": "workspace:*"
+  },
   "scripts": {
     "build": "node --check src/index.mjs",
     "typecheck": "tsc --allowJs --checkJs --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 src/index.mjs"

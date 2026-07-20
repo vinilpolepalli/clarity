@@ -28,6 +28,20 @@ describe("PreferenceStore", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ mode: "sales", reduceMotion: true });
   });
 
+  it("does not drop screen preferences during concurrent updates", async () => {
+    const path = await temporaryPath();
+    const store = new PreferenceStore(path);
+    await Promise.all([
+      store.update({ screenContextEnabled: true }),
+      store.update({ provider: "nvidia", model: "custom/vision" })
+    ]);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+      screenContextEnabled: true,
+      provider: "nvidia",
+      model: "custom/vision"
+    });
+  });
+
   it("keeps the committed value when rename fails and allows a later update", async () => {
     const path = await temporaryPath();
     let failRename = true;
