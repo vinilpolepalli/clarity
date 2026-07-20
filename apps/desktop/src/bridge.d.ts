@@ -60,11 +60,36 @@ export interface Preferences {
   captureSystemAudio: boolean;
   provider: string;
   model: string;
+  customModels: Record<"nvidia" | "openai" | "anthropic", string[]>;
   mode: string;
   selectedSettingsTab: string;
   cloudEnabled: boolean;
   integrations: { notion: boolean; googleCalendar: boolean };
   keybindings: Record<string, string>;
+}
+
+export interface ProviderModel {
+  id: string;
+  label: string;
+  description: string;
+  source: "curated" | "discovered";
+}
+
+export interface ProviderConnectionError {
+  code: string;
+  message: string;
+  provider: string;
+  status: number | null;
+  retryable: boolean;
+}
+
+export interface ProviderConnection {
+  state: "untested" | "testing" | "connected" | "error";
+  provider: string | null;
+  model: string | null;
+  testedAt: string | null;
+  latencyMs: number | null;
+  error: ProviderConnectionError | null;
 }
 
 export interface SettingsModel {
@@ -73,6 +98,8 @@ export interface SettingsModel {
   app: { version: string; packaged: boolean; demo: boolean };
   onboarding: boolean;
   keyConfigured: Record<string, boolean>;
+  providerCatalog: { curated: ProviderModel[]; discoverySupported: boolean };
+  providerConnection: ProviderConnection;
 }
 
 declare global {
@@ -94,6 +121,8 @@ declare global {
       requestPermission(capability: "accessibility" | "microphone" | "screen"): Promise<SettingsModel["permissions"]>;
       saveProviderKey(provider: string, key: string): Promise<SettingsModel>;
       deleteProviderKey(provider: string): Promise<SettingsModel>;
+      listProviderModels(): Promise<{ ok: boolean; models: ProviderModel[]; error?: ProviderConnectionError }>;
+      testProviderConnection(): Promise<SettingsModel>;
       openExternal(target: string): Promise<boolean>;
       onModel(listener: (model: SettingsModel) => void): () => void;
     };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Accessibility,
@@ -35,7 +35,7 @@ import {
   X
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
-import type { Preferences, SettingsModel } from "./bridge";
+import type { Preferences, ProviderModel, SettingsModel } from "./bridge";
 import "./styles.css";
 
 type TabId = "general" | "models" | "audio" | "modes" | "keybindings" | "profile" | "privacy" | "integrations" | "about";
@@ -167,26 +167,123 @@ function GeneralPage({ preferences, update }: PageProps) {
     </Section></>;
 }
 
-interface PageProps { preferences: Preferences; model: SettingsModel; update: (patch: Partial<Preferences>) => void; setModel: (model: SettingsModel) => void }
+interface PageProps { preferences: Preferences; model: SettingsModel; update: (patch: Partial<Preferences>) => Promise<void>; setModel: (model: SettingsModel) => void }
+
+const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+  demo: "clarity-demo",
+  nvidia: "deepseek-ai/deepseek-v4-flash",
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-sonnet-4-5"
+};
 
 function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   const [key, setKey] = useState("");
   const [message, setMessage] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const [discoveredModels, setDiscoveredModels] = useState<ProviderModel[]>([]);
+  const [discoveryState, setDiscoveryState] = useState<"idle" | "loading" | "error">("idle");
+  const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const discoveryRevision = useRef(0);
   const provider = preferences.provider;
   const needsKey = provider !== "demo";
+  const hostedProvider = provider as keyof Preferences["customModels"];
+  const savedCustomModels = preferences.customModels[hostedProvider] ?? [];
+  const connection = model.providerConnection;
+  const modelOptions = useMemo(() => {
+    const choices = new Map<string, string>();
+    for (const candidate of model.providerCatalog.curated) choices.set(candidate.id, `${candidate.label} · ${candidate.description}`);
+    for (const candidate of discoveredModels) if (!choices.has(candidate.id)) choices.set(candidate.id, candidate.id);
+    for (const id of savedCustomModels) if (!choices.has(id)) choices.set(id, `${id} · Custom`);
+    if (preferences.model && !choices.has(preferences.model)) choices.set(preferences.model, `${preferences.model} · Selected`);
+    return [...choices].map(([value, label]) => ({ value, label }));
+  }, [discoveredModels, model.providerCatalog.curated, preferences.model, savedCustomModels]);
+
+  useEffect(() => {
+    discoveryRevision.current += 1;
+    setDiscoveredModels([]);
+    setDiscoveryState("idle");
+    setDiscoveryMessage("");
+    setMessage("");
+  }, [provider]);
+
   async function saveKey() {
     try {
       setModel(await window.claritySettings.saveProviderKey(provider, key));
       setKey(""); setMessage("Saved securely in macOS Keychain.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not save the key."); }
   }
+
+  async function refreshModels() {
+    const revision = ++discoveryRevision.current;
+    setDiscoveryState("loading");
+    setDiscoveryMessage("");
+    const result = await window.claritySettings.listProviderModels();
+    if (revision !== discoveryRevision.current) return;
+    if (result.ok) {
+      setDiscoveredModels(result.models);
+      setDiscoveryState("idle");
+      setDiscoveryMessage(result.models.length ? `Found ${result.models.length} models from the provider.` : "The provider returned no models; curated and custom models remain available.");
+    } else {
+      setDiscoveryState("error");
+      setDiscoveryMessage(result.error?.message ?? "Could not refresh models; curated and custom models remain available.");
+    }
+  }
+
+  async function addCustomModel() {
+    const id = customModel.trim();
+    if (!id || id.length > 160 || /\s/.test(id)) {
+      setDiscoveryState("error");
+      setDiscoveryMessage("Enter a model ID without spaces, up to 160 characters.");
+      return;
+    }
+    if (!savedCustomModels.includes(id) && savedCustomModels.length >= 20) {
+      setDiscoveryState("error");
+      setDiscoveryMessage("Remove a saved custom model before adding another one.");
+      return;
+    }
+    const next = [...new Set([...savedCustomModels, id])].slice(0, 20);
+    await update({ customModels: { ...preferences.customModels, [provider]: next }, model: id });
+    setCustomModel("");
+    setDiscoveryState("idle");
+    setDiscoveryMessage(`Added ${id} and selected it.`);
+  }
+
+  async function removeCustomModel(id: string) {
+    const next = savedCustomModels.filter((candidate) => candidate !== id);
+    const patch: Partial<Preferences> = { customModels: { ...preferences.customModels, [provider]: next } };
+    if (preferences.model === id) patch.model = model.providerCatalog.curated[0]?.id ?? DEFAULT_PROVIDER_MODELS[provider];
+    await update(patch);
+  }
+
+  async function testProvider() {
+    setMessage("");
+    setModel(await window.claritySettings.testProviderConnection());
+  }
+
+  const testedTime = connection.testedAt
+    ? new Date(connection.testedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : null;
+  const connectionTitle = connection.state === "connected"
+    ? "Selected model is connected"
+    : connection.state === "testing" ? "Testing the selected model…"
+      : connection.state === "error" ? "Connection test failed" : "Not tested for this configuration";
+  const connectionCopy = connection.state === "connected"
+    ? `${connection.model} answered at ${testedTime}${connection.latencyMs !== null ? ` in ${connection.latencyMs} ms` : ""}.`
+    : connection.state === "testing" ? "Clarity is sending a tiny non-streaming request from this Mac."
+      : connection.state === "error" ? connection.error?.message ?? "The provider could not verify this configuration."
+        : "Test after saving a key. Changing the provider, model, or key clears prior evidence.";
+
   return <><PageTitle eyebrow="Bring your own key" title="Models" description="Inference runs from this desktop. Provider credentials are never synced." />
     <Section title="Provider">
-      <SettingRow icon={<WandSparkles size={16} />} title="Inference provider" description="The demo provider is deterministic and works offline."><Select label="Provider" value={provider} onChange={(value) => update({ provider: value, model: value === "demo" ? "clarity-demo" : value === "anthropic" ? "claude-sonnet" : value === "nvidia" ? "meta/llama-3.3-70b-instruct" : "gpt-4.1-mini" })} options={[{ value: "demo", label: "Clarity Demo" }, { value: "nvidia", label: "NVIDIA NIM" }, { value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }]} /></SettingRow>
-      <SettingRow icon={<Sparkles size={16} />} title="Model" description="Choose a fast model for live assistance."><input className="settings-input compact" value={preferences.model} onChange={(event) => update({ model: event.target.value })} aria-label="Model identifier" /></SettingRow>
+      <SettingRow icon={<WandSparkles size={16} />} title="Inference provider" description="The demo provider is deterministic and works offline."><Select label="Provider" value={provider} onChange={(value) => update({ provider: value, model: DEFAULT_PROVIDER_MODELS[value] })} options={[{ value: "demo", label: "Clarity Demo" }, { value: "nvidia", label: "NVIDIA NIM" }, { value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }]} /></SettingRow>
+      <SettingRow icon={<Sparkles size={16} />} title="Model" description="Curated models appear in Clarity's preferred order; refreshed and custom models follow."><span className="model-picker-actions"><Select label="Model" value={preferences.model} onChange={(value) => update({ model: value })} options={modelOptions} />{needsKey && model.providerCatalog.discoverySupported && <button className="secondary-button compact-button" type="button" disabled={!model.keyConfigured[provider] || discoveryState === "loading"} onClick={refreshModels}><RefreshCw className={discoveryState === "loading" ? "spin" : ""} size={13} />{discoveryState === "loading" ? "Refreshing" : "Refresh"}</button>}</span></SettingRow>
+      {needsKey && <div className="custom-model-panel"><div><input className="settings-input" value={customModel} onChange={(event) => setCustomModel(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void addCustomModel(); }} placeholder="publisher/model-id" aria-label="Custom model ID" /><button className="secondary-button" type="button" disabled={!customModel.trim()} onClick={addCustomModel}>Add custom model</button></div>{savedCustomModels.length > 0 && <div className="custom-model-list" aria-label="Saved custom models">{savedCustomModels.map((id) => <span key={id}><small title={id}>{id}</small><button type="button" aria-label={`Remove ${id}`} onClick={() => removeCustomModel(id)}><X size={11} /></button></span>)}</div>}{discoveryMessage && <p className={discoveryState === "error" ? "is-error" : ""}>{discoveryMessage}</p>}</div>}
     </Section>
     {needsKey && <Section title="Provider key" description="Clarity stores this secret directly in macOS Keychain. It is never written to preferences or logs.">
       <div className="credential-panel"><div><span className={`credential-status ${model.keyConfigured[provider] ? "is-set" : ""}`}><KeyRound size={14} />{model.keyConfigured[provider] ? "Key configured" : "No key configured"}</span><input className="settings-input" type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} placeholder={`Paste ${provider} API key`} /></div><button className="secondary-button" type="button" disabled={!key.trim()} onClick={saveKey}>Save to Keychain</button>{model.keyConfigured[provider] && <button className="danger-text-button" type="button" onClick={async () => setModel(await window.claritySettings.deleteProviderKey(provider))}>Remove</button>}</div>{message && <p className="inline-message">{message}</p>}
+    </Section>}
+    {needsKey && <Section title="Connection test" description="This makes one tiny request to the selected model. A successful result proves the key, endpoint, and model work together.">
+      <div className={`provider-connection is-${connection.state}`}><span><i /><span><strong>{connectionTitle}</strong><small>{connectionCopy}</small></span></span><button className="secondary-button" type="button" disabled={!model.keyConfigured[provider] || !preferences.model || connection.state === "testing"} onClick={testProvider}>{connection.state === "testing" ? <RefreshCw className="spin" size={13} /> : <Radio size={13} />}{connection.state === "testing" ? "Testing" : connection.state === "connected" ? "Test again" : "Test connection"}</button></div>
     </Section>}
     <div className="callout"><ShieldCheck size={17} /><div><strong>Desktop-side inference boundary</strong><p>Optional cloud features may sync encrypted artifacts, but they do not receive your provider key or run inference in v1.</p></div></div></>;
 }
