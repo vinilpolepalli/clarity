@@ -46,12 +46,28 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
 
     await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What are the next steps?");
     await overlay.getByRole("button", { name: "Send" }).click();
-    await expect(overlay.getByRole("heading", { name: "A focused answer" })).toBeVisible();
+    await expect(overlay.getByRole("heading", { name: "What are the next steps?" })).toBeVisible();
+    await expect(overlay.locator(".user-bubble")).toHaveText("What are the next steps?");
+    await expect(overlay.getByText("Finish the smallest testable slice first")).toBeVisible();
     await expect(overlay).toHaveScreenshot("overlay-response.png");
 
     const resized = await overlay.evaluate(() => window.clarityOverlay.testSetBounds!({ width: 430, height: 330 }));
     expect(resized.width).toBe(430);
     await expect(overlay.getByText("Finish the smallest testable slice first")).toBeVisible();
+
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Can you build on that?");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect(overlay.getByText("I heard: “Can you build on that?”")).toBeVisible();
+    await expect(overlay.locator(".chat-turn")).toHaveCount(4);
+    await expect(overlay.getByRole("textbox", { name: "Ask Clarity" })).toHaveAttribute("placeholder", "Ask a follow-up…");
+
+    await overlay.getByRole("button", { name: "Recent conversations" }).click();
+    await expect(overlay.getByRole("heading", { name: "Conversations" })).toBeVisible();
+    await expect(overlay.locator(".history-row")).toHaveCount(1);
+    await expect(overlay.locator(".message-count")).toHaveText("4 messages");
+    await overlay.locator(".history-row").click();
+    await expect(overlay.locator(".user-bubble")).toHaveCount(2);
+    await expect(overlay.getByText("Can you build on that?", { exact: true })).toBeVisible();
 
     await overlay.getByRole("button", { name: "Settings" }).click();
     const settings = await pageByTitle(application, "Clarity");

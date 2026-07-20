@@ -61,14 +61,19 @@ export const DEMO_HISTORY = Object.freeze([
 
 export function createInitialOverlayState(visible = true) {
   return {
-    version: 1,
+    version: 2,
     phase: visible ? "compact-idle" : "hidden",
     previousVisiblePhase: "compact-idle",
     prompt: "",
     response: "",
+    conversationId: null,
+    conversationTitle: "",
+    messages: [],
     error: null,
     selectedHistoryId: null,
     requestId: null,
+    activeAssistantMessageId: null,
+    lastPrompt: "",
     startedAt: null
   };
 }
@@ -80,8 +85,16 @@ export function isExpandedPhase(phase) {
 export function assertOverlayState(value) {
   if (!value || typeof value !== "object") throw new TypeError("Overlay state must be an object");
   if (!OVERLAY_PHASES.includes(value.phase)) throw new TypeError(`Unknown overlay phase: ${String(value.phase)}`);
-  if (value.version !== 1) throw new TypeError("Unsupported overlay state version");
+  if (value.version !== 2) throw new TypeError("Unsupported overlay state version");
   return value;
+}
+
+function message(role, content, { id = crypto.randomUUID(), status = "complete", createdAt = new Date().toISOString() } = {}) {
+  return { id: String(id), role, content: String(content), status, createdAt };
+}
+
+function replaceMessage(messages, id, patch) {
+  return messages.map((item) => item.id === id ? { ...item, ...patch } : item);
 }
 
 export function mergePreferences(value) {
@@ -112,21 +125,80 @@ export function reduceOverlay(state, event) {
     case "SET_PROMPT":
       return { ...state, prompt: String(event.prompt ?? "").slice(0, 8_000) };
     case "SUBMIT": {
+      if (state.requestId) return state;
       const prompt = String(event.prompt ?? state.prompt).trim().slice(0, 8_000);
-      if (!prompt) return { ...state, phase: "expanded-empty", response: "", error: null };
-      return { ...state, phase: "expanded-empty", prompt, response: "", error: null, requestId: String(event.requestId ?? crypto.randomUUID()) };
+      if (!prompt) return { ...state, phase: state.messages.length ? "expanded-response" : "expanded-empty", error: null };
+      const conversationId = state.conversationId ?? String(event.conversationId ?? crypto.randomUUID());
+      const userMessage = message("user", prompt, { id: event.userMessageId });
+      const assistantMessage = message("assistant", "", { id: event.assistantMessageId, status: "streaming" });
+      return {
+        ...state,
+        phase: "expanded-response",
+        prompt: "",
+        response: "",
+        conversationId,
+        conversationTitle: state.conversationTitle || prompt.slice(0, 72),
+        messages: [...state.messages, userMessage, assistantMessage],
+        error: null,
+        selectedHistoryId: null,
+        requestId: String(event.requestId ?? crypto.randomUUID()),
+        activeAssistantMessageId: assistantMessage.id,
+        lastPrompt: prompt
+      };
     }
-    case "RESOLVE":
+    case "RETRY": {
+      if (state.requestId || !state.lastPrompt || !state.conversationId) return state;
+      const assistantMessage = message("assistant", "", { id: event.assistantMessageId, status: "streaming" });
+      return {
+        ...state,
+        phase: "expanded-response",
+        messages: [...state.messages.filter((item) => item.status !== "error"), assistantMessage],
+        response: "",
+        error: null,
+        requestId: String(event.requestId ?? crypto.randomUUID()),
+        activeAssistantMessageId: assistantMessage.id
+      };
+    }
+    case "RESOLVE": {
       if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
-      return { ...state, phase: "expanded-response", response: String(event.response ?? ""), error: null, requestId: null };
-    case "STREAM":
+      const response = String(event.response ?? "");
+      return {
+        ...state,
+        phase: "expanded-response",
+        response,
+        messages: replaceMessage(state.messages, state.activeAssistantMessageId, { content: response, status: "complete" }),
+        error: null,
+        requestId: null,
+        activeAssistantMessageId: null
+      };
+    }
+    case "STREAM": {
       if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
-      return { ...state, phase: "expanded-response", response: String(event.response ?? ""), error: null };
-    case "FAIL":
+      const response = String(event.response ?? "");
+      return {
+        ...state,
+        phase: "expanded-response",
+        response,
+        messages: replaceMessage(state.messages, state.activeAssistantMessageId, { content: response, status: "streaming" }),
+        error: null
+      };
+    }
+    case "FAIL": {
       if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
-      return { ...state, phase: "expanded-error", error: String(event.error ?? "Something went wrong."), requestId: null };
+      if (!state.activeAssistantMessageId) {
+        return { ...state, phase: "expanded-error", error: String(event.error ?? "Something went wrong."), requestId: null };
+      }
+      return {
+        ...state,
+        phase: "expanded-response",
+        messages: replaceMessage(state.messages, state.activeAssistantMessageId, { status: "error" }),
+        error: String(event.error ?? "Something went wrong."),
+        requestId: null,
+        activeAssistantMessageId: null
+      };
+    }
     case "EXPAND":
-      return { ...state, phase: state.response ? "expanded-response" : "expanded-empty" };
+      return { ...state, phase: state.messages.length ? "expanded-response" : "expanded-empty" };
     case "COLLAPSE":
       return { ...state, phase: state.startedAt ? "compact-listening" : "compact-idle", error: null, selectedHistoryId: null };
     case "START_LISTENING":
@@ -135,10 +207,33 @@ export function reduceOverlay(state, event) {
       return { ...state, phase: isExpandedPhase(state.phase) ? state.phase : "compact-idle", startedAt: null };
     case "SHOW_HISTORY":
       return { ...state, phase: "expanded-history", selectedHistoryId: null, error: null };
-    case "SELECT_HISTORY":
-      return { ...state, phase: "expanded-history", selectedHistoryId: String(event.id ?? "") };
-    case "CLEAR":
-      return { ...createInitialOverlayState(true), startedAt: state.startedAt };
+    case "LOAD_CONVERSATION": {
+      const conversation = event.conversation;
+      if (!conversation || typeof conversation !== "object") return state;
+      const messages = Array.isArray(conversation.messages)
+        ? conversation.messages.filter((item) => item?.role === "user" || item?.role === "assistant").map((item) => message(item.role, item.content, item))
+        : [];
+      const lastUserMessage = [...messages].reverse().find((item) => item.role === "user");
+      return {
+        ...state,
+        phase: messages.length ? "expanded-response" : "expanded-empty",
+        prompt: "",
+        response: [...messages].reverse().find((item) => item.role === "assistant")?.content ?? "",
+        conversationId: String(conversation.id ?? ""),
+        conversationTitle: String(conversation.title ?? "Untitled conversation"),
+        messages,
+        error: null,
+        selectedHistoryId: null,
+        requestId: null,
+        activeAssistantMessageId: null,
+        lastPrompt: lastUserMessage?.content ?? ""
+      };
+    }
+    case "CLEAR": {
+      const cleared = createInitialOverlayState(true);
+      const phase = isExpandedPhase(state.phase) ? "expanded-empty" : state.startedAt ? "compact-listening" : "compact-idle";
+      return { ...cleared, phase, previousVisiblePhase: phase, startedAt: state.startedAt };
+    }
     default:
       return state;
   }

@@ -10,21 +10,45 @@ export function providerDefinition(id) {
   return definition;
 }
 
-export function buildProviderRequest({ provider, model, prompt, key }) {
+export function boundedConversationMessages(messages, { maxMessages = 24, maxCharacters = 18_000 } = {}) {
+  const normalized = (Array.isArray(messages) ? messages : [])
+    .filter((item) => item?.role === "user" || item?.role === "assistant")
+    .map((item) => ({ role: item.role, content: String(item.content ?? "").trim().slice(0, 12_000) }))
+    .filter((item) => item.content);
+  const selected = [];
+  let characters = 0;
+  for (let index = normalized.length - 1; index >= 0 && selected.length < maxMessages; index -= 1) {
+    const item = normalized[index];
+    const remaining = maxCharacters - characters;
+    if (remaining <= 0) break;
+    if (item.content.length > remaining) {
+      if (!selected.length) selected.unshift({ ...item, content: item.content.slice(0, remaining) });
+      break;
+    }
+    selected.unshift(item);
+    characters += item.content.length;
+  }
+  while (selected[0]?.role === "assistant") selected.shift();
+  return selected;
+}
+
+export function buildProviderRequest({ provider, model, messages, prompt, key }) {
   const definition = providerDefinition(provider);
   const headers = { "content-type": "application/json" };
+  const conversation = boundedConversationMessages(messages?.length ? messages : [{ role: "user", content: prompt }]);
+  if (!conversation.length) throw new Error("A provider request requires at least one user message");
   if (provider === "anthropic") {
     headers[definition.header] = key;
     headers["anthropic-version"] = "2023-06-01";
     return {
       url: definition.endpoint,
-      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 900, stream: true, system: systemPrompt(), messages: [{ role: "user", content: prompt }] }) }
+      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 900, stream: true, system: systemPrompt(), messages: conversation }) }
     };
   }
   headers[definition.header] = `Bearer ${key}`;
   return {
     url: definition.endpoint,
-    init: { method: "POST", headers, body: JSON.stringify({ model, stream: true, temperature: 0.2, messages: [{ role: "system", content: systemPrompt() }, { role: "user", content: prompt }] }) }
+    init: { method: "POST", headers, body: JSON.stringify({ model, stream: true, temperature: 0.2, messages: [{ role: "system", content: systemPrompt() }, ...conversation] }) }
   };
 }
 

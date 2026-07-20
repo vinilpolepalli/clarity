@@ -57,12 +57,73 @@ let storage = null;
 let capture = null;
 const recentAudio = new RollingAudioBuffer();
 
-async function persistResponse(prompt, response) {
-  if (!storage || !response) return;
-  const id = crypto.randomUUID();
-  const title = prompt.trim().slice(0, 72) || "Untitled session";
-  try { await storage.call("create", { id, title, prompt, response, mode: preferences.mode }); }
-  catch (error) { console.warn("Could not persist the local response:", error.message); }
+async function persistConversationMessage(conversationId, message, sequence) {
+  if (!storage) return;
+  await storage.call("appendMessage", {
+    id: message.id,
+    sessionId: conversationId,
+    sequence,
+    role: message.role,
+    content: message.content,
+    status: "complete",
+    createdAt: message.createdAt
+  });
+}
+
+function delay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+async function runConversationInference({ requestId, createConversation, persistUser }) {
+  const snapshot = structuredClone(overlayState);
+  const conversationId = snapshot.conversationId;
+  const assistantIndex = snapshot.messages.findIndex((item) => item.id === snapshot.activeAssistantMessageId);
+  const assistantMessage = snapshot.messages[assistantIndex];
+  const userIndex = [...snapshot.messages].map((item) => item.role).lastIndexOf("user");
+  const userMessage = snapshot.messages[userIndex];
+  const providerMessages = snapshot.messages
+    .filter((item) => (item.role === "user" || item.role === "assistant") && item.content && item.status !== "error")
+    .map(({ role, content }) => ({ role, content }));
+  const inference = activeInference;
+
+  try {
+    if (createConversation) {
+      await storage?.call("createConversation", {
+        id: conversationId,
+        title: snapshot.conversationTitle || "Untitled conversation",
+        mode: preferences.mode
+      });
+    }
+    if (persistUser && userMessage) await persistConversationMessage(conversationId, userMessage, userIndex);
+
+    let response;
+    if (preferences.provider === "demo") {
+      await delay(preferences.reduceMotion ? 80 : 680, inference.signal);
+      response = demoResponse(userMessage?.content ?? snapshot.lastPrompt);
+    } else {
+      const key = await readProviderKey(preferences.provider);
+      response = await streamProviderResponse({
+        provider: preferences.provider,
+        model: preferences.model,
+        messages: providerMessages,
+        key,
+        signal: inference.signal,
+        onToken: (_token, accumulated) => dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false })
+      });
+    }
+
+    if (overlayState.requestId !== requestId) return;
+    await persistConversationMessage(conversationId, { ...assistantMessage, content: response }, assistantIndex);
+    dispatchOverlay({ type: "RESOLVE", requestId, response });
+  } catch (error) {
+    if (error?.name !== "AbortError") dispatchOverlay({ type: "FAIL", requestId, error: error.message });
+  }
 }
 
 function rendererTarget(page) {
@@ -133,6 +194,8 @@ function applyOverlayPresentation(previousPhase, animate = true) {
 
 function dispatchOverlay(event, options = {}) {
   const previousPhase = overlayState.phase;
+  const previousRequestId = overlayState.requestId;
+  const previousConversationId = overlayState.conversationId;
   overlayState = reduceOverlay(overlayState, event);
   applyOverlayPresentation(previousPhase, options.animate !== false);
   sendOverlayState();
@@ -145,41 +208,17 @@ function dispatchOverlay(event, options = {}) {
   }
   if (event.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
 
-  if (event.type === "SUBMIT" && overlayState.requestId) {
+  if (event.type === "CLEAR") activeInference?.abort();
+
+  if ((event.type === "SUBMIT" || event.type === "RETRY") && overlayState.requestId && overlayState.requestId !== previousRequestId) {
     const requestId = overlayState.requestId;
-    const prompt = overlayState.prompt;
     activeInference?.abort();
     activeInference = new AbortController();
-    if (preferences.provider === "demo") {
-      setTimeout(() => {
-        if (overlayState.requestId !== requestId) return;
-        try {
-          dispatchOverlay({ type: "RESOLVE", requestId, response: demoResponse(prompt) });
-          void persistResponse(prompt, overlayState.response);
-        } catch (error) {
-          dispatchOverlay({ type: "FAIL", requestId, error: error.message });
-        }
-      }, preferences.reduceMotion ? 80 : 680);
-    } else {
-      void (async () => {
-        const inference = activeInference;
-        try {
-          const key = await readProviderKey(preferences.provider);
-          const response = await streamProviderResponse({
-            provider: preferences.provider,
-            model: preferences.model,
-            prompt,
-            key,
-            signal: inference.signal,
-            onToken: (_token, accumulated) => dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false })
-          });
-          dispatchOverlay({ type: "RESOLVE", requestId, response });
-          void persistResponse(prompt, response);
-        } catch (error) {
-          if (error?.name !== "AbortError") dispatchOverlay({ type: "FAIL", requestId, error: error.message });
-        }
-      })();
-    }
+    void runConversationInference({
+      requestId,
+      createConversation: event.type === "SUBMIT" && !previousConversationId,
+      persistUser: event.type === "SUBMIT"
+    });
   }
   return structuredClone(overlayState);
 }
@@ -297,6 +336,17 @@ function registerIpc() {
   ipcMain.handle("overlay:get-history", async () => {
     const local = storage ? await storage.call("list", { limit: 50 }) : [];
     return local.length ? local : structuredClone(DEMO_HISTORY);
+  });
+  ipcMain.handle("overlay:get-conversation", async (_event, id) => {
+    const local = storage ? await storage.call("get", { id }) : null;
+    if (local) return local;
+    const demo = DEMO_HISTORY.find((item) => item.id === id);
+    if (!demo) return null;
+    return {
+      id: demo.id,
+      title: demo.title,
+      messages: demo.response ? [{ id: `${demo.id}-assistant`, role: "assistant", content: demo.response, status: "complete", createdAt: new Date().toISOString() }] : []
+    };
   });
   ipcMain.handle("overlay:open-settings", () => { createSettingsWindow(); return true; });
 
