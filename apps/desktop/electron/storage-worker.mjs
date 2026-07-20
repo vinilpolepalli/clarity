@@ -1,60 +1,14 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { CURRENT_SCHEMA_VERSION, initializeStorageDatabase } from "./storage-schema.mjs";
 
 const directory = process.argv.find((value) => value.startsWith("--directory="))?.slice("--directory=".length);
 if (!directory) throw new Error("Storage directory is required");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 const database = new DatabaseSync(join(directory, "clarity.sqlite"));
 database.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;");
-database.exec(`
-  CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    prompt TEXT NOT NULL DEFAULT '',
-    response TEXT NOT NULL DEFAULT '',
-    started_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'meeting',
-    status TEXT NOT NULL DEFAULT 'complete'
-  );
-  CREATE TABLE IF NOT EXISTS transcript_segments (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    sequence INTEGER NOT NULL,
-    speaker TEXT,
-    text TEXT NOT NULL,
-    started_ms INTEGER NOT NULL,
-    ended_ms INTEGER NOT NULL,
-    UNIQUE(session_id, sequence)
-  );
-  CREATE TABLE IF NOT EXISTS artifacts (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS conversation_messages (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    sequence INTEGER NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-    content TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'complete',
-    created_at TEXT NOT NULL,
-    UNIQUE(session_id, sequence)
-  );
-  CREATE INDEX IF NOT EXISTS conversation_messages_session_sequence
-    ON conversation_messages(session_id, sequence);
-  CREATE VIRTUAL TABLE IF NOT EXISTS session_search USING fts5(session_id UNINDEXED, title, prompt, response);
-  INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
-  INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
-`);
+initializeStorageDatabase(database);
 
 const statements = {
   list: database.prepare(`
@@ -64,8 +18,8 @@ const statements = {
     FROM sessions s ORDER BY s.updated_at DESC LIMIT ?
   `),
   get: database.prepare("SELECT * FROM sessions WHERE id = ?"),
-  insert: database.prepare("INSERT INTO sessions(id, title, prompt, response, started_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-  insertIfMissing: database.prepare("INSERT OR IGNORE INTO sessions(id, title, prompt, response, started_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  insert: database.prepare("INSERT INTO sessions(id, title, prompt, response, started_at, updated_at, mode, mode_prompt_version, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+  insertIfMissing: database.prepare("INSERT OR IGNORE INTO sessions(id, title, prompt, response, started_at, updated_at, mode, mode_prompt_version, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
   insertMessage: database.prepare("INSERT INTO conversation_messages(id, session_id, sequence, role, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   insertMessageIfMissing: database.prepare("INSERT OR IGNORE INTO conversation_messages(id, session_id, sequence, role, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   listMessages: database.prepare("SELECT id, role, content, status, created_at AS createdAt FROM conversation_messages WHERE session_id = ? ORDER BY sequence"),
@@ -94,6 +48,7 @@ function conversation(id) {
     startedAt: session.started_at,
     updatedAt: session.updated_at,
     mode: session.mode,
+    modePromptVersion: session.mode_prompt_version,
     status: session.status,
     messages: statements.listMessages.all(id)
   };
@@ -108,12 +63,12 @@ function rebuildSearchIndex(id) {
 
 function handle(method, params) {
   switch (method) {
-    case "health": return { ok: true, schemaVersion: 2 };
+    case "health": return { ok: true, schemaVersion: CURRENT_SCHEMA_VERSION };
     case "list": return statements.list.all(Math.min(Number(params.limit ?? 50), 200));
     case "get": return conversation(params.id);
     case "createConversation": {
       const now = params.timestamp ?? new Date().toISOString();
-      statements.insert.run(params.id, params.title, "", "", now, now, params.mode ?? "meeting", params.status ?? "active");
+      statements.insert.run(params.id, params.title, "", "", now, now, params.mode ?? "general", params.modePromptVersion ?? 1, params.status ?? "active");
       statements.searchIndex.run(params.id, params.title, "", "");
       return conversation(params.id);
     }
@@ -122,7 +77,7 @@ function handle(method, params) {
       const messages = Array.isArray(params.messages) ? params.messages : [];
       database.exec("BEGIN IMMEDIATE");
       try {
-        statements.insertIfMissing.run(params.id, params.title, "", "", now, now, params.mode ?? "meeting", params.status ?? "active");
+        statements.insertIfMissing.run(params.id, params.title, "", "", now, now, params.mode ?? "general", params.modePromptVersion ?? 1, params.status ?? "active");
         for (const [sequence, message] of messages.entries()) {
           if (message?.role !== "user" && message?.role !== "assistant") continue;
           statements.insertMessageIfMissing.run(
@@ -155,7 +110,7 @@ function handle(method, params) {
       const now = params.timestamp ?? new Date().toISOString();
       database.exec("BEGIN IMMEDIATE");
       try {
-        statements.insert.run(params.id, params.title, params.prompt ?? "", params.response ?? "", now, now, params.mode ?? "meeting", params.status ?? "complete");
+        statements.insert.run(params.id, params.title, params.prompt ?? "", params.response ?? "", now, now, params.mode ?? "general", params.modePromptVersion ?? 1, params.status ?? "complete");
         statements.searchIndex.run(params.id, params.title, params.prompt ?? "", params.response ?? "");
         database.exec("COMMIT");
         return statements.get.get(params.id);

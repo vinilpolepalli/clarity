@@ -1,26 +1,60 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { PreferenceStore } from "./persistence.mjs";
 
+const temporaryDirectories = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+async function temporaryPath() {
+  const directory = await mkdtemp(join(tmpdir(), "clarity-preferences-"));
+  temporaryDirectories.push(directory);
+  return join(directory, "preferences.json");
+}
+
 describe("PreferenceStore", () => {
-  it("serializes concurrent atomic updates without dropping screen preferences", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "clarity-preferences-"));
-    const path = join(directory, "preferences.json");
-    try {
-      const store = new PreferenceStore(path);
-      await store.load();
-      await Promise.all([
-        store.update({ screenContextEnabled: true }),
-        store.update({ provider: "nvidia", model: "custom/vision" })
-      ]);
-      const persisted = JSON.parse(await readFile(path, "utf8"));
-      expect(persisted.screenContextEnabled).toBe(true);
-      expect(persisted.provider).toBe("nvidia");
-      expect(persisted.model).toBe("custom/vision");
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+  it("serializes updates and commits only after the atomic rename", async () => {
+    const path = await temporaryPath();
+    const store = new PreferenceStore(path);
+    await Promise.all([
+      store.update({ mode: "sales" }),
+      store.update({ reduceMotion: true })
+    ]);
+    expect(store.snapshot()).toMatchObject({ mode: "sales", reduceMotion: true });
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ mode: "sales", reduceMotion: true });
+  });
+
+  it("does not drop screen preferences during concurrent updates", async () => {
+    const path = await temporaryPath();
+    const store = new PreferenceStore(path);
+    await Promise.all([
+      store.update({ screenContextEnabled: true }),
+      store.update({ provider: "nvidia", model: "custom/vision" })
+    ]);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+      screenContextEnabled: true,
+      provider: "nvidia",
+      model: "custom/vision"
+    });
+  });
+
+  it("keeps the committed value when rename fails and allows a later update", async () => {
+    const path = await temporaryPath();
+    let failRename = true;
+    const store = new PreferenceStore(path, {
+      rename: async (from, to) => {
+        if (failRename) throw new Error("disk unavailable");
+        return (await import("node:fs/promises")).rename(from, to);
+      }
+    });
+    await expect(store.update({ mode: "sales" })).rejects.toThrow("disk unavailable");
+    expect(store.snapshot().mode).toBe("general");
+    failRename = false;
+    await store.update({ mode: "lecture" });
+    expect(store.snapshot().mode).toBe("lecture");
   });
 });

@@ -186,30 +186,26 @@ function attachImageToLatestUser(conversation, screenshot, provider) {
   });
 }
 
-export function buildProviderRequest({ provider, model, messages = [], prompt = "", key, stream = true, maxTokens = 900, image = null }) {
+export function buildProviderRequest({ provider, model, messages = [], prompt = "", systemPrompt, key, stream = true, maxTokens = 900, image = null }) {
   const definition = providerDefinition(provider);
+  if (typeof systemPrompt !== "string" || !systemPrompt.trim()) throw new TypeError("A system prompt is required");
   const headers = providerHeaders(provider, key);
   const screenshot = validateImage(image);
+  const effectiveSystemPrompt = screenshot ? `${systemPrompt} ${SCREEN_CONTEXT_INSTRUCTION}` : systemPrompt;
   const conversation = boundedConversationMessages(messages?.length ? messages : [{ role: "user", content: prompt }]);
   if (!conversation.length) throw new Error("A provider request requires at least one user message");
   const providerMessages = attachImageToLatestUser(conversation, screenshot, provider);
   if (provider === "anthropic") {
     return {
       url: definition.endpoint,
-      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: maxTokens, stream, system: systemPrompt(Boolean(screenshot)), messages: providerMessages }) }
+      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: maxTokens, stream, system: effectiveSystemPrompt, messages: providerMessages }) }
     };
   }
   return {
     url: definition.endpoint,
-    init: { method: "POST", headers, body: JSON.stringify({ model, stream, max_tokens: maxTokens, temperature: stream ? 0.2 : 0, messages: [{ role: "system", content: systemPrompt(Boolean(screenshot)) }, ...providerMessages] }) }
+    init: { method: "POST", headers, body: JSON.stringify({ model, stream, max_tokens: maxTokens, temperature: stream ? 0.2 : 0, messages: [{ role: "system", content: effectiveSystemPrompt }, ...providerMessages] }) }
   };
 }
-
-function systemPrompt(hasScreenshot = false) {
-  const base = "You are Clarity, a concise meeting copilot. Use only supplied context, call out uncertainty, never invent quotes, and prefer decisions, owners, and next steps. Do not claim to be invisible or undetectable.";
-  return hasScreenshot ? `${base} ${SCREEN_CONTEXT_INSTRUCTION}` : base;
-}
-
 function redact(value) {
   return String(value ?? "")
     .replace(/data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+/gi, "[redacted screenshot]")
@@ -327,7 +323,15 @@ export async function testConnection({ provider, model, key, signal, fetchImpl =
   const definition = providerDefinition(provider);
   const selectedModel = String(model ?? "").trim();
   if (!selectedModel) throw new ProviderError("Choose a model before testing the connection.", { code: "model_required", provider });
-  const request = buildProviderRequest({ provider, model: selectedModel, prompt: "Reply only with OK.", key, stream: false, maxTokens: 4 });
+  const request = buildProviderRequest({
+    provider,
+    model: selectedModel,
+    prompt: "Reply only with OK.",
+    systemPrompt: "You are testing a provider connection. Follow the user instruction exactly.",
+    key,
+    stream: false,
+    maxTokens: 4
+  });
   const timed = withTimeout(signal, timeoutMs);
   const startedAt = Date.now();
   try {

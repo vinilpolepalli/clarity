@@ -1,5 +1,19 @@
 /** @typedef {'hidden'|'compact-idle'|'compact-listening'|'expanded-empty'|'expanded-response'|'expanded-error'|'expanded-history'} OverlayPhase */
 
+import { isModeId } from "./modes.mjs";
+
+export {
+  assembleSystemPrompt,
+  assertModeId,
+  BUILT_IN_MODES,
+  CLARITY_BASE_PROMPT,
+  createModeModel,
+  isModeId,
+  listModeMetadata,
+  MODE_GROUPS,
+  resolveMode
+} from "./modes.mjs";
+
 export const OVERLAY_PHASES = Object.freeze([
   "hidden",
   "compact-idle",
@@ -34,7 +48,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   model: "clarity-demo",
   imageInputOverrides: {},
   customModels: { nvidia: [], openai: [], anthropic: [] },
-  mode: "meeting",
+  mode: "general",
   selectedSettingsTab: "general",
   cloudEnabled: false,
   integrations: { notion: false, googleCalendar: false },
@@ -126,7 +140,7 @@ export function mergePreferences(value) {
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
   const imageInputOverrides = candidate.imageInputOverrides && typeof candidate.imageInputOverrides === "object" ? candidate.imageInputOverrides : {};
   const customModels = candidate.customModels && typeof candidate.customModels === "object" ? candidate.customModels : {};
-  return {
+  const merged = {
     ...DEFAULT_PREFERENCES,
     ...candidate,
     version: 1,
@@ -141,6 +155,7 @@ export function mergePreferences(value) {
       return [provider, normalized];
     }))
   };
+  return { ...merged, mode: isModeId(merged.mode) ? merged.mode : "general" };
 }
 
 export function reduceOverlay(state, event) {
@@ -333,11 +348,13 @@ export function reduceOverlay(state, event) {
   }
 }
 
-export function demoResponse(prompt) {
+export function demoResponse(prompt, mode = {}) {
   const compact = String(prompt).trim().replace(/\s+/g, " ");
+  const modeLabel = String(mode.label ?? "General");
+  const modeFocus = String(mode.behaviorSummary ?? "Direct, concise assistance.");
   if (/error/i.test(compact)) throw new Error("The local demo provider intentionally failed. Your data stayed on this Mac.");
   if (/sequence|plan|next/i.test(compact)) {
-    return "Here’s a focused sequence:\n\n• Confirm the outcome and the release gate\n• Capture decisions with a clear owner\n• Finish the smallest testable slice first\n• Verify failure recovery before adding integrations\n• Record the result and attach evidence";
+    return `${modeLabel} mode · ${modeFocus}\n\nHere’s a focused sequence:\n\n• Confirm the outcome and the release gate\n• Capture decisions with a clear owner\n• Finish the smallest testable slice first\n• Verify failure recovery before adding integrations\n• Record the result and attach evidence`;
   }
-  return `I heard: “${compact}”\n\nThe important point is to turn that into a concrete decision, name an owner, and preserve the evidence needed to verify it later. Clarity can keep this session local unless you explicitly enable encrypted cloud sync.`;
+  return `${modeLabel} mode · ${modeFocus}\n\nI heard: “${compact}”\n\nThe important point is to turn that into a concrete decision, name an owner, and preserve the evidence needed to verify it later. Clarity can keep this session local unless you explicitly enable encrypted cloud sync.`;
 }

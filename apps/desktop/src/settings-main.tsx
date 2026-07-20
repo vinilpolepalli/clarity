@@ -35,7 +35,7 @@ import {
   X
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
-import type { Preferences, ProviderModel, SettingsModel } from "./bridge";
+import type { ModeMetadata, Preferences, ProviderModel, SettingsModel } from "./bridge";
 import "./styles.css";
 
 type TabId = "general" | "models" | "audio" | "modes" | "keybindings" | "profile" | "privacy" | "integrations" | "about";
@@ -167,7 +167,7 @@ function GeneralPage({ preferences, update }: PageProps) {
     </Section></>;
 }
 
-interface PageProps { preferences: Preferences; model: SettingsModel; update: (patch: Partial<Preferences>) => Promise<void>; setModel: (model: SettingsModel) => void }
+interface PageProps { preferences: Preferences; model: SettingsModel; update: (patch: Partial<Preferences>) => Promise<SettingsModel>; setModel: (model: SettingsModel) => void }
 
 function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   const [key, setKey] = useState("");
@@ -304,13 +304,85 @@ function AudioPage({ preferences, model, update }: PageProps) {
     </Section></>;
 }
 
-function ModesPage({ preferences, update }: PageProps) {
-  const modes = [
-    { id: "meeting", title: "Meeting", copy: "Decisions, questions, owners, and follow-ups.", icon: <CircleUserRound size={18} /> },
-    { id: "interview", title: "Interview", copy: "Concise prompts and evidence-backed notes.", icon: <Mic size={18} /> },
-    { id: "lecture", title: "Lecture", copy: "Definitions, explanations, and study structure.", icon: <FileText size={18} /> }
-  ];
-  return <><PageTitle eyebrow="Context presets" title="Modes" description="Tune the structure of help without changing your provider or privacy boundary." /><div className="mode-grid">{modes.map((mode) => <button className={`mode-card ${preferences.mode === mode.id ? "is-selected" : ""}`} key={mode.id} type="button" onClick={() => update({ mode: mode.id })}><span>{mode.icon}</span><div><strong>{mode.title}</strong><p>{mode.copy}</p></div>{preferences.mode === mode.id && <Check size={15} />}</button>)}</div><Section title="Mode behavior"><SettingRow icon={<Sparkles size={16} />} title="Active preset" description="Applied to new questions and session artifacts."><span className="value-chip">{preferences.mode}</span></SettingRow></Section></>;
+function ModesPage({ model, update }: PageProps) {
+  const { modeModel } = model;
+  const [previewId, setPreviewId] = useState(modeModel.activeModeId);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const listboxRef = useRef<HTMLElement>(null);
+  const preview = modeModel.modes.find((mode) => mode.id === previewId) ?? modeModel.modes[0]!;
+  const general = modeModel.modes.find((mode) => mode.group === null);
+
+  function movePreview(direction: -1 | 1) {
+    const items = [...(listboxRef.current?.querySelectorAll<HTMLButtonElement>("[data-mode-id]") ?? [])];
+    const focusedIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    const previewIndex = modeModel.modes.findIndex((mode) => mode.id === preview.id);
+    const nextIndex = Math.max(0, Math.min(items.length - 1, (focusedIndex < 0 ? previewIndex : focusedIndex) + direction));
+    const next = items[nextIndex];
+    if (!next) return;
+    next.focus();
+    setPreviewId(next.dataset.modeId!);
+  }
+
+  async function activatePreview() {
+    if (preview.id === modeModel.activeModeId || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await update({ mode: preview.id });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save the active mode.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function modeRow(mode: ModeMetadata) {
+    const active = mode.id === modeModel.activeModeId;
+    return (
+      <button
+        className={`mode-list-row ${preview.id === mode.id ? "is-previewed" : ""}`}
+        key={mode.id}
+        type="button"
+        role="option"
+        aria-selected={preview.id === mode.id}
+        data-mode-id={mode.id}
+        onClick={() => { setPreviewId(mode.id); setError(""); }}
+      >
+        <span className="mode-list-icon"><Sparkles size={14} /></span>
+        <span>{mode.label}</span>
+        {active && <Check className="mode-active-check" size={14} aria-label="Active mode" />}
+      </button>
+    );
+  }
+
+  return <>
+    <PageTitle eyebrow="Context presets" title="Modes" description="Choose how Clarity helps without changing your provider or privacy boundary." />
+    <section
+      className="mode-browser"
+      aria-label="Assistant modes"
+      onKeyDown={(event) => {
+        if (event.key === "ArrowDown") { event.preventDefault(); movePreview(1); }
+        if (event.key === "ArrowUp") { event.preventDefault(); movePreview(-1); }
+        if (event.key === "Enter" && event.metaKey) { event.preventDefault(); void activatePreview(); }
+      }}
+    >
+      <aside ref={listboxRef} className="mode-sidebar" role="listbox" aria-label="Available modes">
+        {general && modeRow(general)}
+        {modeModel.groups.map((group) => <div className="mode-list-group" role="group" aria-label={group.label} key={group.id}><h2>{group.label}</h2>{modeModel.modes.filter((mode) => mode.group === group.id).map(modeRow)}</div>)}
+      </aside>
+      <div className="mode-detail">
+        <div className="mode-detail-heading"><span><Sparkles size={20} /></span><div><small>ASSISTANT MODE</small><h2>{preview.label}</h2></div></div>
+        <p>{preview.description}</p>
+        <div className="mode-behavior"><small>HOW CLARITY WILL HELP</small><p>{preview.behaviorSummary}</p></div>
+        <div className="mode-detail-status">{preview.id === modeModel.activeModeId ? <><Check size={13} /> Active for new questions</> : <>Previewing mode</>}</div>
+      </div>
+      <footer className="mode-browser-footer">
+        <span role={error ? "alert" : undefined}>{error || "Mode changes apply to new questions. Current responses keep their original mode."}</span>
+        <button className="primary-button" type="button" disabled={preview.id === modeModel.activeModeId || saving} onClick={() => void activatePreview()}>{saving ? "Saving…" : preview.id === modeModel.activeModeId ? "Active" : "Set Active"}</button>
+      </footer>
+    </section>
+  </>;
 }
 
 function KeybindingsPage({ preferences }: PageProps) {
@@ -345,7 +417,7 @@ function SettingsApp() {
   const activeTab = (model?.preferences.selectedSettingsTab ?? "general") as TabId;
   const page = useMemo(() => {
     if (!model) return null;
-    const props: PageProps = { preferences: model.preferences, model, setModel, update: async (patch) => setModel(await window.claritySettings.update(patch)) };
+    const props: PageProps = { preferences: model.preferences, model, setModel, update: async (patch) => { const next = await window.claritySettings.update(patch); setModel(next); return next; } };
     switch (activeTab) {
       case "models": return <ModelsPage {...props} />;
       case "audio": return <AudioPage {...props} />;
@@ -364,7 +436,7 @@ function SettingsApp() {
     <main className="settings-shell">
       <div className="settings-titlebar window-drag"><span><BrandMark size={17} /> Clarity</span><small>Settings</small></div>
       <nav className="settings-tabs" aria-label="Settings categories">{tabs.map((tab) => <button className={activeTab === tab.id ? "is-active" : ""} type="button" key={tab.id} onClick={() => window.claritySettings.update({ selectedSettingsTab: tab.id })}><span>{tab.icon}</span><small>{tab.label}</small></button>)}</nav>
-      <div className="settings-content" key={activeTab}>{page}<footer className="settings-footer"><span><ShieldCheck size={12} /> Local first</span><span>Clarity {model.app.version}</span></footer></div>
+      <div className={`settings-content ${activeTab === "modes" ? "is-modes-page" : ""}`} key={activeTab}>{page}<footer className="settings-footer"><span><ShieldCheck size={12} /> Local first</span><span>Clarity {model.app.version}</span></footer></div>
     </main>
   );
 }
