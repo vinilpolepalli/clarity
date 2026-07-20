@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-async function launch(extraEnv: Record<string, string> = {}) {
-  const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-"));
+async function launch(extraEnv: Record<string, string> = {}, existingUserData?: string) {
+  const userData = existingUserData ?? await mkdtemp(join(tmpdir(), "clarity-e2e-"));
   const application = await electron.launch({
     args: ["."],
     cwd: join(import.meta.dirname, "../.."),
@@ -168,6 +168,78 @@ test("fresh launch completes the split onboarding without forced permissions", a
     await expect(overlay.locator("[data-phase='compact-idle']")).toBeVisible();
   } finally {
     await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
+test("screen-share protection toggles immediately and persists", async () => {
+  const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-protection-"));
+  const env = { CLARITY_TEST_PRESERVE_CONTENT_PROTECTION: "1" };
+  let application: Awaited<ReturnType<typeof electron.launch>> | null = null;
+  try {
+    ({ application } = await launch(env, userData));
+    let overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("button", { name: "Expand" }).click();
+    await expect(overlay.locator("[data-phase='expanded-empty']")).toBeVisible();
+    const before = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(before.settings.preferences.protectOverlayContent).toBe(true);
+    expect(before.contentProtected).toBe(true);
+    expect(before.resizable).toBe(true);
+
+    await overlay.evaluate(() => window.clarityOverlay.openSettings());
+    const settings = await pageByTitle(application, "Clarity");
+    await settings.getByRole("button", { name: "Privacy" }).click();
+    const protection = settings.getByRole("switch", { name: "Hide overlay from screen sharing (best effort)" });
+    await expect(protection).toHaveAttribute("aria-checked", "true");
+
+    await protection.click();
+    await expect(protection).toHaveAttribute("aria-checked", "false");
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    await expect.poll(async () => overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).toMatchObject({
+      contentProtected: false,
+      settings: { preferences: { protectOverlayContent: false } }
+    });
+
+    await protection.click();
+    await expect(protection).toHaveAttribute("aria-checked", "true");
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    await expect.poll(async () => (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).contentProtected).toBe(true);
+
+    await protection.click();
+    await expect(protection).toHaveAttribute("aria-checked", "false");
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    const after = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(after.contentProtected).toBe(false);
+    expect(after.settings.preferences.protectOverlayContent).toBe(false);
+    expect(after.resizable).toBe(true);
+    expect(after.overlay).toEqual(before.overlay);
+    expect(after.bounds).toEqual(before.bounds);
+
+    await application.close();
+    application = null;
+
+    ({ application } = await launch(env, userData));
+    const relaunchedOverlay = await pageByTitle(application, "Clarity Overlay");
+    const relaunched = await relaunchedOverlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(relaunched.settings.preferences.protectOverlayContent).toBe(false);
+    expect(relaunched.contentProtected).toBe(false);
+
+    await relaunchedOverlay.evaluate(() => window.clarityOverlay.openSettings());
+    const relaunchedSettings = await pageByTitle(application, "Clarity");
+    await relaunchedSettings.getByRole("button", { name: "Privacy" }).click();
+    const relaunchedProtection = relaunchedSettings.getByRole("switch", { name: "Hide overlay from screen sharing (best effort)" });
+    await relaunchedProtection.click();
+    await expect(relaunchedProtection).toHaveAttribute("aria-checked", "true");
+    await relaunchedProtection.click();
+    await expect(relaunchedProtection).toHaveAttribute("aria-checked", "false");
+    const rebuiltCompactOverlay = await pageByTitle(application, "Clarity Overlay");
+    const rebuiltCompact = await rebuiltCompactOverlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(rebuiltCompact.contentProtected).toBe(false);
+    expect(rebuiltCompact.resizable).toBe(false);
+    expect(rebuiltCompact.overlay).toEqual(relaunched.overlay);
+    expect(rebuiltCompact.bounds).toEqual(relaunched.bounds);
+  } finally {
+    await application?.close();
     await rm(userData, { recursive: true, force: true });
   }
 });
