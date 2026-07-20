@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Clock3,
   Copy,
+  Grid2X2,
   History,
   Mic,
   MicOff,
@@ -19,7 +20,8 @@ import {
   X
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
-import type { HistoryItem, OverlayState } from "./bridge";
+import { ModePicker } from "./ModePicker";
+import type { HistoryItem, ModeModel, OverlayState } from "./bridge";
 import "./styles.css";
 
 const isExpanded = (phase: string) => phase.startsWith("expanded-");
@@ -85,7 +87,7 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
         <span className="eyebrow">Local provider</span>
         <h2>Clarity couldn’t finish that response</h2>
         <p>{state.error}</p>
-        <button className="secondary-button" type="button" onClick={() => dispatch({ type: "SUBMIT", prompt: state.prompt })}><RotateCcw size={14} /> Try again</button>
+        <button className="secondary-button" type="button" onClick={() => dispatch({ type: "RETRY" })}><RotateCcw size={14} /> Try again</button>
       </section>
     );
   }
@@ -128,17 +130,25 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
 function OverlayApp() {
   const [state, setState] = useState<OverlayState | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [modeModel, setModeModel] = useState<ModeModel | null>(null);
+  const [modePicker, setModePicker] = useState<{ placement: "above" | "below"; viewportHeight: number; surfaceOffsetY: number; surfaceHeight: number } | null>(null);
+  const [modeError, setModeError] = useState("");
   const [draft, setDraft] = useState("");
   const [now, setNow] = useState(Date.now());
   const input = useRef<HTMLInputElement>(null);
+  const modeButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     window.clarityOverlay.getState().then(setState);
     window.clarityOverlay.getHistory().then(setHistory);
-    return window.clarityOverlay.onState((next) => {
+    window.clarityOverlay.getModeModel().then(setModeModel);
+    const removeStateListener = window.clarityOverlay.onState((next) => {
       setState(next);
       setDraft(next.prompt);
     });
+    const removeModeListener = window.clarityOverlay.onModeModel(setModeModel);
+    const removePickerListener = window.clarityOverlay.onPickerClosed(() => setModePicker(null));
+    return () => { removeStateListener(); removeModeListener(); removePickerListener(); };
   }, []);
 
   useEffect(() => {
@@ -160,10 +170,51 @@ function OverlayApp() {
     dispatch({ type: "SUBMIT", prompt: draft });
   }
 
+  async function closeModePicker() {
+    setModePicker(null);
+    await window.clarityOverlay.closeModePicker();
+  }
+
+  async function toggleModePicker() {
+    if (modePicker) { await closeModePicker(); return; }
+    const anchorRect = modeButton.current?.getBoundingClientRect();
+    if (!anchorRect) return;
+    setModeError("");
+    try {
+      const surfaceHeight = window.innerHeight;
+      const presentation = await window.clarityOverlay.openModePicker({
+        desiredHeight: 420,
+        anchorRect: { x: anchorRect.x, y: anchorRect.y, width: anchorRect.width, height: anchorRect.height }
+      });
+      setModePicker({ ...presentation, surfaceHeight });
+    } catch (cause) {
+      setModeError(cause instanceof Error ? cause.message : "Could not open modes.");
+    }
+  }
+
+  async function selectMode(modeId: string) {
+    setModeError("");
+    try {
+      setModeModel(await window.clarityOverlay.setMode(modeId));
+      await closeModePicker();
+    } catch (cause) {
+      setModeError(cause instanceof Error ? cause.message : "Could not save the active mode.");
+    }
+  }
+
+  async function manageModes() {
+    await closeModePicker();
+    await window.clarityOverlay.openSettings("modes");
+  }
+
   if (!state || state.phase === "hidden") return null;
 
   return (
-    <main className={`overlay-shell ${expanded ? "is-expanded" : "is-compact"}`} data-phase={state.phase}>
+    <main
+      className={`overlay-shell ${expanded ? "is-expanded" : "is-compact"} ${modePicker ? "has-mode-picker" : ""}`}
+      data-phase={state.phase}
+      style={modePicker ? { "--overlay-surface-height": `${modePicker.surfaceHeight}px`, "--overlay-surface-offset": `${modePicker.surfaceOffsetY}px` } as React.CSSProperties : undefined}
+    >
       <div className="overlay-surface">
         <header className="overlay-chrome">
           <div className="drag-handle" title="Drag Clarity"><Move size={12} /><span>Clarity</span></div>
@@ -188,7 +239,7 @@ function OverlayApp() {
             onChange={(event) => { setDraft(event.target.value); void window.clarityOverlay.dispatch({ type: "SET_PROMPT", prompt: event.target.value }); }}
             placeholder={listening ? "Ask about this conversation…" : "Ask anything…"}
           />
-          <span className="mode-pill"><Sparkles size={11} /> Meeting <ChevronDown size={10} /></span>
+          <button ref={modeButton} className={`mode-pill ${modePicker ? "is-active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={Boolean(modePicker)} aria-label={`Assistant mode: ${modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.label ?? "General"}`} onClick={() => void toggleModePicker()}><Grid2X2 size={12} /><span>{modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.shortLabel ?? "General"}</span><ChevronDown size={10} /></button>
           <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch({ type: listening ? "STOP_LISTENING" : "START_LISTENING" })}>
             {listening ? <Square size={13} fill="currentColor" /> : <Mic size={15} />}
           </IconButton>
@@ -198,6 +249,7 @@ function OverlayApp() {
           <button className="send-button" type="submit" aria-label="Send" disabled={!draft.trim()}><SendHorizontal size={14} /></button>
         </form>
       </div>
+      {modePicker && modeModel && <ModePicker anchorElement={modeButton.current} model={modeModel} placement={modePicker.placement} viewportHeight={modePicker.viewportHeight} error={modeError} onClose={() => void closeModePicker()} onManage={() => void manageModes()} onSelect={(modeId) => void selectMode(modeId)} />}
       {listening && !expanded && <span className="listening-ribbon"><MicOff size={11} /> Click stop to end capture</span>}
     </main>
   );

@@ -27,6 +27,28 @@ export interface HistoryItem {
   response: string;
 }
 
+export interface ModeGroupMetadata {
+  id: "looking-for-work" | "work" | "school";
+  label: string;
+  order: number;
+}
+
+export interface ModeMetadata {
+  id: string;
+  label: string;
+  shortLabel: string;
+  group: ModeGroupMetadata["id"] | null;
+  description: string;
+  behaviorSummary: string;
+  promptVersion: number;
+}
+
+export interface ModeModel {
+  activeModeId: string;
+  groups: ModeGroupMetadata[];
+  modes: ModeMetadata[];
+}
+
 export interface Preferences {
   version: 1;
   onboardingComplete: boolean;
@@ -50,6 +72,7 @@ export interface Preferences {
 
 export interface SettingsModel {
   preferences: Preferences;
+  modeModel: ModeModel;
   permissions: Record<"accessibility" | "microphone" | "screen", string>;
   app: { version: string; packaged: boolean; demo: boolean };
   onboarding: boolean;
@@ -62,9 +85,15 @@ declare global {
       getState(): Promise<OverlayState>;
       dispatch(action: Record<string, unknown>): Promise<OverlayState>;
       getHistory(): Promise<HistoryItem[]>;
-      openSettings(): Promise<boolean>;
+      getModeModel(): Promise<ModeModel>;
+      setMode(modeId: string): Promise<ModeModel>;
+      openModePicker(layout: { desiredHeight: number; anchorRect: { x: number; y: number; width: number; height: number } }): Promise<{ placement: "above" | "below"; viewportHeight: number; surfaceOffsetY: number }>;
+      closeModePicker(): Promise<boolean>;
+      openSettings(tab?: string): Promise<boolean>;
       onState(listener: (state: OverlayState) => void): () => void;
-      testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel }>;
+      onModeModel(listener: (model: ModeModel) => void): () => void;
+      onPickerClosed(listener: () => void): () => void;
+      testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel; pickerOpen: boolean; activeRequest: { requestId: string; modeId: string; promptVersion: number } | null; failedRequest: { modeId: string; promptVersion: number } | null }>;
       testSetBounds?(bounds: Partial<{ x: number; y: number; width: number; height: number }>): Promise<{ x: number; y: number; width: number; height: number }>;
     };
     claritySettings: {

@@ -10,26 +10,23 @@ export function providerDefinition(id) {
   return definition;
 }
 
-export function buildProviderRequest({ provider, model, prompt, key }) {
+export function buildProviderRequest({ provider, model, prompt, systemPrompt, key }) {
   const definition = providerDefinition(provider);
+  if (typeof systemPrompt !== "string" || !systemPrompt.trim()) throw new TypeError("A system prompt is required");
   const headers = { "content-type": "application/json" };
   if (provider === "anthropic") {
     headers[definition.header] = key;
     headers["anthropic-version"] = "2023-06-01";
     return {
       url: definition.endpoint,
-      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 900, stream: true, system: systemPrompt(), messages: [{ role: "user", content: prompt }] }) }
+      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 900, stream: true, system: systemPrompt, messages: [{ role: "user", content: prompt }] }) }
     };
   }
   headers[definition.header] = `Bearer ${key}`;
   return {
     url: definition.endpoint,
-    init: { method: "POST", headers, body: JSON.stringify({ model, stream: true, temperature: 0.2, messages: [{ role: "system", content: systemPrompt() }, { role: "user", content: prompt }] }) }
+    init: { method: "POST", headers, body: JSON.stringify({ model, stream: true, temperature: 0.2, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }] }) }
   };
-}
-
-function systemPrompt() {
-  return "You are Clarity, a concise meeting copilot. Use only supplied context, call out uncertainty, never invent quotes, and prefer decisions, owners, and next steps. Do not claim to be invisible or undetectable.";
 }
 
 export function parseServerSentEvent(provider, eventText) {

@@ -1,5 +1,19 @@
 /** @typedef {'hidden'|'compact-idle'|'compact-listening'|'expanded-empty'|'expanded-response'|'expanded-error'|'expanded-history'} OverlayPhase */
 
+import { isModeId } from "./modes.mjs";
+
+export {
+  assembleSystemPrompt,
+  assertModeId,
+  BUILT_IN_MODES,
+  CLARITY_BASE_PROMPT,
+  createModeModel,
+  isModeId,
+  listModeMetadata,
+  MODE_GROUPS,
+  resolveMode
+} from "./modes.mjs";
+
 export const OVERLAY_PHASES = Object.freeze([
   "hidden",
   "compact-idle",
@@ -24,7 +38,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   captureSystemAudio: true,
   provider: "demo",
   model: "clarity-demo",
-  mode: "meeting",
+  mode: "general",
   selectedSettingsTab: "general",
   cloudEnabled: false,
   integrations: { notion: false, googleCalendar: false },
@@ -88,13 +102,14 @@ export function mergePreferences(value) {
   const candidate = value && typeof value === "object" ? value : {};
   const keybindings = candidate.keybindings && typeof candidate.keybindings === "object" ? candidate.keybindings : {};
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
-  return {
+  const merged = {
     ...DEFAULT_PREFERENCES,
     ...candidate,
     version: 1,
     keybindings: { ...DEFAULT_PREFERENCES.keybindings, ...keybindings },
     integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations }
   };
+  return { ...merged, mode: isModeId(merged.mode) ? merged.mode : "general" };
 }
 
 export function reduceOverlay(state, event) {
@@ -111,7 +126,8 @@ export function reduceOverlay(state, event) {
       return state.phase === "hidden" ? reduceOverlay(state, { type: "SHOW" }) : reduceOverlay(state, { type: "HIDE" });
     case "SET_PROMPT":
       return { ...state, prompt: String(event.prompt ?? "").slice(0, 8_000) };
-    case "SUBMIT": {
+    case "SUBMIT":
+    case "RETRY": {
       const prompt = String(event.prompt ?? state.prompt).trim().slice(0, 8_000);
       if (!prompt) return { ...state, phase: "expanded-empty", response: "", error: null };
       return { ...state, phase: "expanded-empty", prompt, response: "", error: null, requestId: String(event.requestId ?? crypto.randomUUID()) };
@@ -144,11 +160,13 @@ export function reduceOverlay(state, event) {
   }
 }
 
-export function demoResponse(prompt) {
+export function demoResponse(prompt, mode = {}) {
   const compact = String(prompt).trim().replace(/\s+/g, " ");
+  const modeLabel = String(mode.label ?? "General");
+  const modeFocus = String(mode.behaviorSummary ?? "Direct, concise assistance.");
   if (/error/i.test(compact)) throw new Error("The local demo provider intentionally failed. Your data stayed on this Mac.");
   if (/sequence|plan|next/i.test(compact)) {
-    return "Here’s a focused sequence:\n\n• Confirm the outcome and the release gate\n• Capture decisions with a clear owner\n• Finish the smallest testable slice first\n• Verify failure recovery before adding integrations\n• Record the result and attach evidence";
+    return `${modeLabel} mode · ${modeFocus}\n\nHere’s a focused sequence:\n\n• Confirm the outcome and the release gate\n• Capture decisions with a clear owner\n• Finish the smallest testable slice first\n• Verify failure recovery before adding integrations\n• Record the result and attach evidence`;
   }
-  return `I heard: “${compact}”\n\nThe important point is to turn that into a concrete decision, name an owner, and preserve the evidence needed to verify it later. Clarity can keep this session local unless you explicitly enable encrypted cloud sync.`;
+  return `${modeLabel} mode · ${modeFocus}\n\nI heard: “${compact}”\n\nThe important point is to turn that into a concrete decision, name an owner, and preserve the evidence needed to verify it later. Clarity can keep this session local unless you explicitly enable encrypted cloud sync.`;
 }

@@ -14,16 +14,21 @@ import {
   systemPreferences
 } from "electron";
 import {
+  assembleSystemPrompt,
+  assertModeId,
   createInitialOverlayState,
+  createModeModel,
   DEMO_HISTORY,
   demoResponse,
   isExpandedPhase,
-  reduceOverlay
+  reduceOverlay,
+  resolveMode
 } from "@clarity/domain";
 import {
   COMPACT_HEIGHT,
   boundsEqual,
   defaultCompactBounds,
+  pickerPresentationBounds,
   transitionBounds
 } from "@clarity/windowing";
 import { streamProviderResponse } from "@clarity/providers";
@@ -36,6 +41,7 @@ const APP_ROOT = join(import.meta.dirname, "..");
 const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo");
 const isTest = process.env.CLARITY_TEST === "1";
 const testOnboarding = process.env.CLARITY_TEST_ONBOARDING === "1";
+const SETTINGS_TABS = new Set(["general", "models", "audio", "modes", "keybindings", "profile", "privacy", "integrations", "about"]);
 
 app.setName("Clarity");
 if (isTest && process.env.CLARITY_TEST_USER_DATA) app.setPath("userData", process.env.CLARITY_TEST_USER_DATA);
@@ -52,16 +58,18 @@ let store;
 let boundsWriteTimer = null;
 let programmaticBounds = false;
 let keyConfigured = { openai: false, anthropic: false, nvidia: false };
-let activeInference = null;
+let activeRequestContext = null;
+let lastFailedRequestContext = null;
 let storage = null;
 let capture = null;
+let pickerAnchorBounds = null;
 const recentAudio = new RollingAudioBuffer();
 
-async function persistResponse(prompt, response) {
+async function persistResponse(prompt, response, modeId, modePromptVersion) {
   if (!storage || !response) return;
   const id = crypto.randomUUID();
   const title = prompt.trim().slice(0, 72) || "Untitled session";
-  try { await storage.call("create", { id, title, prompt, response, mode: preferences.mode }); }
+  try { await storage.call("create", { id, title, prompt, response, mode: modeId, modePromptVersion }); }
   catch (error) { console.warn("Could not persist the local response:", error.message); }
 }
 
@@ -83,8 +91,68 @@ function sendSettingsModel() {
   }
 }
 
+function getModeModel() {
+  return createModeModel(preferences.mode);
+}
+
+function sendOverlayModeModel() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send("overlay:mode-model", getModeModel());
+  }
+}
+
+async function setActiveMode(modeId) {
+  const validatedModeId = assertModeId(modeId);
+  const nextPreferences = await store.update({ mode: validatedModeId });
+  preferences = nextPreferences;
+  sendSettingsModel();
+  sendOverlayModeModel();
+  return getModeModel();
+}
+
 function displayForBounds(bounds) {
   return screen.getDisplayMatching(bounds).workArea;
+}
+
+function validatePickerLayout(layout) {
+  const desiredHeight = Number(layout?.desiredHeight);
+  const anchorRect = layout?.anchorRect;
+  if (!Number.isFinite(desiredHeight) || desiredHeight < 120 || desiredHeight > 800) throw new TypeError("Invalid mode picker height");
+  if (!anchorRect || [anchorRect.x, anchorRect.y, anchorRect.width, anchorRect.height].some((value) => !Number.isFinite(Number(value)))) {
+    throw new TypeError("Invalid mode picker anchor");
+  }
+  return { desiredHeight };
+}
+
+function openModePicker(layout) {
+  if (!overlayWindow || overlayWindow.isDestroyed() || overlayState.phase === "hidden") throw new Error("Overlay is not available");
+  const { desiredHeight } = validatePickerLayout(layout);
+  if (pickerAnchorBounds) closeModePicker();
+  const anchorBounds = overlayWindow.getBounds();
+  const presentation = pickerPresentationBounds(anchorBounds, displayForBounds(anchorBounds), desiredHeight);
+  if (presentation.viewportHeight < 120) throw new Error("There is not enough room to open the mode picker");
+  pickerAnchorBounds = anchorBounds;
+  programmaticBounds = true;
+  overlayWindow.setMinimumSize(1, 1);
+  overlayWindow.setMaximumSize(displayForBounds(anchorBounds).width, displayForBounds(anchorBounds).height);
+  overlayWindow.setResizable(false);
+  overlayWindow.setBounds(presentation.bounds, false);
+  setTimeout(() => { programmaticBounds = false; }, 0);
+  return { placement: presentation.placement, viewportHeight: presentation.viewportHeight, surfaceOffsetY: presentation.surfaceOffsetY };
+}
+
+function closeModePicker({ notifyRenderer = false } = {}) {
+  if (!pickerAnchorBounds || !overlayWindow || overlayWindow.isDestroyed()) return false;
+  const anchorBounds = pickerAnchorBounds;
+  pickerAnchorBounds = null;
+  programmaticBounds = true;
+  overlayWindow.setMinimumSize(1, 1);
+  overlayWindow.setMaximumSize(displayForBounds(anchorBounds).width, displayForBounds(anchorBounds).height);
+  overlayWindow.setBounds(anchorBounds, false);
+  applyOverlayPresentation(overlayState.phase, false);
+  setTimeout(() => { programmaticBounds = false; }, 0);
+  if (notifyRenderer) overlayWindow.webContents.send("overlay:picker-closed");
+  return true;
 }
 
 function rememberedGeometry() {
@@ -132,51 +200,89 @@ function applyOverlayPresentation(previousPhase, animate = true) {
 }
 
 function dispatchOverlay(event, options = {}) {
+  if (pickerAnchorBounds && event.type !== "SET_PROMPT") closeModePicker({ notifyRenderer: true });
+  if (event.type === "CLEAR") {
+    activeRequestContext?.controller.abort();
+    activeRequestContext = null;
+    lastFailedRequestContext = null;
+  }
+  let effectiveEvent = event;
+  let retrySource = null;
+  if (event.type === "RETRY") {
+    retrySource = lastFailedRequestContext;
+    if (!retrySource) return structuredClone(overlayState);
+    effectiveEvent = { type: "RETRY", prompt: retrySource.prompt, requestId: crypto.randomUUID() };
+  }
   const previousPhase = overlayState.phase;
-  overlayState = reduceOverlay(overlayState, event);
+  overlayState = reduceOverlay(overlayState, effectiveEvent);
   applyOverlayPresentation(previousPhase, options.animate !== false);
   sendOverlayState();
 
-  if (event.type === "START_LISTENING" && capture) {
+  if (effectiveEvent.type === "START_LISTENING" && capture) {
     void capture.start({ microphone: true, systemAudio: Boolean(preferences.captureSystemAudio) }).catch((error) => {
       dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
       dispatchOverlay({ type: "FAIL", error: `Capture could not start: ${error.message}` });
     });
   }
-  if (event.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
+  if (effectiveEvent.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
 
-  if (event.type === "SUBMIT" && overlayState.requestId) {
+  if ((effectiveEvent.type === "SUBMIT" || effectiveEvent.type === "RETRY") && overlayState.requestId) {
+    activeRequestContext?.controller.abort();
     const requestId = overlayState.requestId;
     const prompt = overlayState.prompt;
-    activeInference?.abort();
-    activeInference = new AbortController();
+    const assembled = retrySource
+      ? { modeId: retrySource.modeId, promptVersion: retrySource.promptVersion, systemPrompt: retrySource.systemPrompt }
+      : assembleSystemPrompt(preferences.mode);
+    const context = {
+      requestId,
+      prompt,
+      ...assembled,
+      controller: new AbortController()
+    };
+    activeRequestContext = context;
+    if (effectiveEvent.type === "SUBMIT") lastFailedRequestContext = null;
+    const selectedMode = resolveMode(context.modeId);
     if (preferences.provider === "demo") {
       setTimeout(() => {
-        if (overlayState.requestId !== requestId) return;
+        if (activeRequestContext?.requestId !== requestId || overlayState.requestId !== requestId) return;
         try {
-          dispatchOverlay({ type: "RESOLVE", requestId, response: demoResponse(prompt) });
-          void persistResponse(prompt, overlayState.response);
+          const response = demoResponse(prompt, selectedMode);
+          dispatchOverlay({ type: "RESOLVE", requestId, response });
+          activeRequestContext = null;
+          lastFailedRequestContext = null;
+          void persistResponse(prompt, response, context.modeId, context.promptVersion);
         } catch (error) {
+          lastFailedRequestContext = { ...context, controller: null };
+          activeRequestContext = null;
           dispatchOverlay({ type: "FAIL", requestId, error: error.message });
         }
       }, preferences.reduceMotion ? 80 : 680);
     } else {
       void (async () => {
-        const inference = activeInference;
         try {
           const key = await readProviderKey(preferences.provider);
           const response = await streamProviderResponse({
             provider: preferences.provider,
             model: preferences.model,
             prompt,
+            systemPrompt: context.systemPrompt,
             key,
-            signal: inference.signal,
-            onToken: (_token, accumulated) => dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false })
+            signal: context.controller.signal,
+            onToken: (_token, accumulated) => {
+              if (activeRequestContext?.requestId === requestId) dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false });
+            }
           });
+          if (activeRequestContext?.requestId !== requestId || overlayState.requestId !== requestId) return;
           dispatchOverlay({ type: "RESOLVE", requestId, response });
-          void persistResponse(prompt, response);
+          activeRequestContext = null;
+          lastFailedRequestContext = null;
+          void persistResponse(prompt, response, context.modeId, context.promptVersion);
         } catch (error) {
-          if (error?.name !== "AbortError") dispatchOverlay({ type: "FAIL", requestId, error: error.message });
+          if (error?.name !== "AbortError" && activeRequestContext?.requestId === requestId) {
+            lastFailedRequestContext = { ...context, controller: null };
+            activeRequestContext = null;
+            dispatchOverlay({ type: "FAIL", requestId, error: error.message });
+          }
         }
       })();
     }
@@ -185,7 +291,7 @@ function dispatchOverlay(event, options = {}) {
 }
 
 function queueBoundsWrite() {
-  if (programmaticBounds || !overlayWindow || overlayWindow.isDestroyed()) return;
+  if (programmaticBounds || pickerAnchorBounds || !overlayWindow || overlayWindow.isDestroyed()) return;
   clearTimeout(boundsWriteTimer);
   boundsWriteTimer = setTimeout(() => {
     const bounds = overlayWindow.getBounds();
@@ -228,6 +334,7 @@ function createOverlayWindow() {
   overlayWindow.setContentProtection(Boolean(preferences.protectOverlayContent));
   overlayWindow.on("move", queueBoundsWrite);
   overlayWindow.on("resize", queueBoundsWrite);
+  overlayWindow.on("will-move", () => { if (!programmaticBounds) closeModePicker({ notifyRenderer: true }); });
   overlayWindow.on("close", (event) => {
     if (!app.isQuitting && !isTest) {
       event.preventDefault();
@@ -235,7 +342,7 @@ function createOverlayWindow() {
     }
   });
   overlayWindow.loadURL(rendererTarget("overlay"));
-  overlayWindow.webContents.once("did-finish-load", () => sendOverlayState());
+  overlayWindow.webContents.once("did-finish-load", () => { sendOverlayState(); sendOverlayModeModel(); });
 }
 
 function createSettingsWindow({ onboarding = false } = {}) {
@@ -284,6 +391,7 @@ function permissionStatus() {
 function getSettingsModel() {
   return {
     preferences: structuredClone(preferences),
+    modeModel: getModeModel(),
     permissions: permissionStatus(),
     app: { version: app.getVersion(), packaged: app.isPackaged, demo: isDemo },
     onboarding: !preferences.onboardingComplete,
@@ -294,11 +402,23 @@ function getSettingsModel() {
 function registerIpc() {
   ipcMain.handle("overlay:get-state", () => structuredClone(overlayState));
   ipcMain.handle("overlay:dispatch", (_event, action) => dispatchOverlay(action));
+  ipcMain.handle("overlay:get-mode-model", () => getModeModel());
+  ipcMain.handle("overlay:set-mode", (_event, modeId) => setActiveMode(modeId));
+  ipcMain.handle("overlay:open-mode-picker", (_event, layout) => openModePicker(layout));
+  ipcMain.handle("overlay:close-mode-picker", () => closeModePicker());
   ipcMain.handle("overlay:get-history", async () => {
     const local = storage ? await storage.call("list", { limit: 50 }) : [];
     return local.length ? local : structuredClone(DEMO_HISTORY);
   });
-  ipcMain.handle("overlay:open-settings", () => { createSettingsWindow(); return true; });
+  ipcMain.handle("overlay:open-settings", async (_event, tab) => {
+    if (tab !== undefined && !SETTINGS_TABS.has(tab)) throw new TypeError("Unknown settings tab");
+    if (tab !== undefined && preferences.selectedSettingsTab !== tab) {
+      preferences = await store.update({ selectedSettingsTab: tab });
+    }
+    createSettingsWindow();
+    sendSettingsModel();
+    return true;
+  });
 
   ipcMain.handle("settings:get-model", () => getSettingsModel());
   ipcMain.handle("settings:update", async (_event, patch) => {
@@ -309,7 +429,9 @@ function registerIpc() {
       "cloudEnabled", "integrations", "keybindings"
     ];
     const safePatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => allowed.includes(key)));
-    preferences = await store.update(safePatch);
+    if (Object.hasOwn(safePatch, "mode")) safePatch.mode = assertModeId(safePatch.mode);
+    const nextPreferences = await store.update(safePatch);
+    preferences = nextPreferences;
     if (Object.hasOwn(safePatch, "launchAtLogin") && app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: Boolean(preferences.launchAtLogin), openAsHidden: true });
     }
@@ -318,6 +440,7 @@ function registerIpc() {
       overlayWindow.setContentProtection(Boolean(preferences.protectOverlayContent));
     }
     sendSettingsModel();
+    if (Object.hasOwn(safePatch, "mode")) sendOverlayModeModel();
     return getSettingsModel();
   });
   ipcMain.handle("settings:complete-onboarding", async () => {
@@ -353,7 +476,14 @@ function registerIpc() {
     return true;
   });
   if (isTest) {
-    ipcMain.handle("test:snapshot", () => ({ overlay: structuredClone(overlayState), bounds: overlayWindow?.getBounds(), settings: getSettingsModel() }));
+    ipcMain.handle("test:snapshot", () => ({
+      overlay: structuredClone(overlayState),
+      bounds: overlayWindow?.getBounds(),
+      settings: getSettingsModel(),
+      pickerOpen: Boolean(pickerAnchorBounds),
+      activeRequest: activeRequestContext ? { requestId: activeRequestContext.requestId, modeId: activeRequestContext.modeId, promptVersion: activeRequestContext.promptVersion } : null,
+      failedRequest: lastFailedRequestContext ? { modeId: lastFailedRequestContext.modeId, promptVersion: lastFailedRequestContext.promptVersion } : null
+    }));
     ipcMain.handle("test:set-bounds", (_event, bounds) => {
       const current = overlayWindow.getBounds();
       overlayWindow.setBounds({ ...current, ...bounds }, false);
@@ -411,6 +541,8 @@ async function boot() {
   overlayState = createInitialOverlayState(showOverlayAtBoot);
   registerIpc();
   createOverlayWindow();
+  screen.on("display-removed", () => closeModePicker({ notifyRenderer: true }));
+  screen.on("display-metrics-changed", () => closeModePicker({ notifyRenderer: true }));
   createApplicationMenu();
   globalShortcut.register(preferences.keybindings.toggleOverlay, () => dispatchOverlay({ type: "TOGGLE_VISIBILITY" }));
   globalShortcut.register(preferences.keybindings.toggleListening, () => dispatchOverlay({ type: overlayState.startedAt ? "STOP_LISTENING" : "START_LISTENING" }));
