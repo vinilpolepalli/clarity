@@ -50,7 +50,7 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 build
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 e2e
 ```
 
-The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
+The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, screen-share protection toggling and restart persistence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
 
 ## Package
 
