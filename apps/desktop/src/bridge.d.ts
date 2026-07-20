@@ -107,7 +107,7 @@ declare global {
       openScreenPermissionSettings(): Promise<boolean>;
       recheckScreenPermission(): Promise<string>;
       onState(listener: (state: OverlayState) => void): () => void;
-      testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel }>;
+      testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel; contentProtected: boolean; resizable: boolean }>;
       testSetBounds?(bounds: Partial<{ x: number; y: number; width: number; height: number }>): Promise<{ x: number; y: number; width: number; height: number }>;
     };
     claritySettings: {

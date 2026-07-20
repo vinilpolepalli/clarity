@@ -6,5 +6,6 @@
 4. For a public release, supply an Apple Developer ID Application identity and notarization credentials through the CI secret store. Never commit certificate or App Store Connect credentials.
 5. Validate the signature with `codesign --verify --deep --strict`, submit/notarize, staple the ticket, then run `spctl --assess` on the final app.
 6. Install from the DMG on a clean macOS user, complete onboarding, grant and revoke each permission, run a capture, submit a demo query, resize/collapse/expand, inspect history, and relaunch.
+7. Run both toggle states through the versioned capture matrix in [`docs/content-protection.md`](content-protection.md). Record actual results without treating best-effort exclusion as a universal guarantee.
 
 Without signing credentials, `pnpm package:mac` produces an unsigned smoke artifact only. It is suitable for local verification, not distribution.
