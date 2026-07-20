@@ -8,13 +8,14 @@ This implementation was created from a clean `origin/main` baseline. It does not
 
 - Two independent Electron windows: a transparent frameless overlay and an opaque settings/onboarding window.
 - Main-process-owned, serializable overlay state for hidden, compact idle/listening, expanded empty/response/error/history states.
+- Continuing conversation threads with ordered user and assistant turns, follow-ups in the same composer, reopenable local history, and a New chat action.
 - Reference-calibrated compact geometry (590×88), expandable/resizable response surface, top-edge anchoring, bounds persistence, and reduced-motion behavior.
 - Split onboarding with explicit Accessibility, Microphone, and Screen/System Audio permission explanations and safe continuation when permissions are denied.
 - General, Models, Audio, Modes, Keybindings, Profile/Cloud, Privacy, Integrations, and About settings. There is no Billing surface.
 - BYOK provider selection with API keys stored only in macOS Keychain, plus a deterministic offline demo provider.
 - Streaming OpenAI-compatible, NVIDIA NIM, and Anthropic provider adapters with cancellation and redacted failures.
 - Native Swift microphone and ScreenCaptureKit system-audio helper with a versioned handshake, sequence epochs, structured errors, and bounded desktop buffering.
-- Local `node:sqlite` database isolated in an Electron utility process, with WAL, migrations, FTS5 search, transcripts, artifacts, and exports.
+- Local `node:sqlite` database isolated in an Electron utility process, with WAL, migrations, ordered conversation messages, FTS5 search, transcripts, artifacts, and exports.
 - A local whisper.cpp CLI adapter, context budgeting, generated-artifact validation, transcript prompt-injection marking, and inference backpressure.
 - Optional encrypted sync envelopes and a row-level-secured Supabase ciphertext schema. Cloud sync remains off by default and never receives provider keys or performs v1 inference.
 - Best-effort overlay content protection with honest wording: Clarity does not claim guaranteed invisibility.
@@ -37,7 +38,7 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 install
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 dev
 ```
 
-Development mode uses the offline deterministic provider and a fresh two-window shell. Provider keys are entered in Settings → Models and stored in Keychain; do not put them in `.env`.
+Development mode uses the offline deterministic provider and a fresh two-window shell. Ask a question, then keep using the same composer for follow-ups; open Recent conversations to resume a saved thread or choose New chat to start over. Provider keys are entered in Settings → Models and stored in Keychain; do not put them in `.env`.
 
 ## Verify
 
@@ -49,7 +50,7 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 build
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 e2e
 ```
 
-The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, deterministic response, settings independence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
+The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
 
 ## Package
 
@@ -57,7 +58,7 @@ The Electron E2E suite verifies compact/expanded bounds, anchor retention, narro
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 package:mac
 ```
 
-This builds the Swift helper in release mode, bundles it as an extra resource, builds both renderer entries, and produces DMG and ZIP artifacts. With no Apple signing identity or notarization credentials, the output is an unsigned local smoke build. Release CI must provide the signing/notarization credentials documented in `docs/releasing.md`.
+This builds the Swift helper in release mode, bundles it as an extra resource, builds both renderer entries, and produces DMG and ZIP artifacts. With no Apple signing identity or notarization credentials, the output is an unsigned local smoke build. Release CI must provide the signing/notarization credentials documented in the [macOS release procedure](docs/releasing.md).
 
 ## Privacy boundary
 
@@ -78,6 +79,7 @@ ScreenCaptureKit permission is used for system audio. Screen pixels are not stor
 - `packages/sync-client` — encrypted optional sync envelope.
 - `native/ClarityCapture` — Swift audio helper.
 - `supabase/migrations` — optional encrypted artifact schema and RLS.
+- [`docs/architecture.md`](docs/architecture.md) — desktop trust boundaries, state ownership, and data flow.
 - `.context/plans` and `.context/verification` — ignored plan, evidence ledger, and parity artifacts for this Conductor workspace.
 
 ## License
