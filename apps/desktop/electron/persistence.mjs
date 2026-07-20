@@ -24,14 +24,17 @@ export class PreferenceStore {
   }
 
   update(patch) {
-    this.value = mergePreferences({ ...this.value, ...patch });
-    const payload = `${JSON.stringify(this.value, null, 2)}\n`;
-    this.writeQueue = this.writeQueue.then(async () => {
+    const operation = this.writeQueue.catch(() => {}).then(async () => {
+      const next = mergePreferences({ ...this.value, ...patch });
+      const payload = `${JSON.stringify(next, null, 2)}\n`;
       await mkdir(dirname(this.path), { recursive: true });
       const temporaryPath = `${this.path}.next`;
       await writeFile(temporaryPath, payload, { mode: 0o600 });
       await rename(temporaryPath, this.path);
+      this.value = next;
+      return this.snapshot();
     });
-    return this.writeQueue.then(() => this.snapshot());
+    this.writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 }

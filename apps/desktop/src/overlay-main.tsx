@@ -7,6 +7,8 @@ import {
   Clock3,
   Copy,
   History,
+  Image as ImageIcon,
+  LoaderCircle,
   Mic,
   MicOff,
   Move,
@@ -24,9 +26,9 @@ import "./styles.css";
 
 const isExpanded = (phase: string) => phase.startsWith("expanded-");
 
-function IconButton({ label, onClick, children, active = false }: { label: string; onClick: () => void; children: React.ReactNode; active?: boolean }) {
+function IconButton({ label, onClick, children, active = false, pressed }: { label: string; onClick: () => void; children: React.ReactNode; active?: boolean; pressed?: boolean }) {
   return (
-    <button className={`icon-button ${active ? "is-active" : ""}`} type="button" onClick={onClick} aria-label={label} title={label}>
+    <button className={`icon-button ${active ? "is-active" : ""}`} type="button" onClick={onClick} aria-label={label} aria-pressed={pressed} title={label}>
       {children}
     </button>
   );
@@ -45,6 +47,67 @@ function ResponseBody({ text }: { text: string }) {
       {paragraphs.map((line, index) => line.startsWith("• ")
         ? <div className="response-bullet" key={`${index}-${line}`}><span>•</span><p>{line.slice(2)}</p></div>
         : line ? <p key={`${index}-${line}`}>{line}</p> : <span className="paragraph-gap" key={index} />)}
+    </div>
+  );
+}
+
+function ViewedScreen({ state }: { state: OverlayState }) {
+  const attachmentId = state.screenContext.attachmentId;
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+
+  useEffect(() => {
+    setOpen(false);
+    setUnavailable(false);
+    setPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  }, [attachmentId]);
+
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
+  async function showPreview() {
+    if (!attachmentId) return;
+    setOpen(true);
+    if (previewUrl || loading || unavailable) return;
+    setLoading(true);
+    try {
+      const preview = await window.clarityOverlay.getScreenPreview(attachmentId);
+      if (!preview) {
+        setUnavailable(true);
+        return;
+      }
+      const bytes = new Uint8Array(preview.bytes);
+      setPreviewUrl(URL.createObjectURL(new Blob([bytes], { type: preview.mediaType })));
+    } catch {
+      setUnavailable(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!attachmentId) return null;
+  const timestamp = state.screenContext.capturedAt ? new Date(state.screenContext.capturedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "Just now";
+  return (
+    <div className="screen-disclosure" onMouseEnter={() => void showPreview()} onMouseLeave={() => setOpen(false)}>
+      <button type="button" onFocus={() => void showPreview()} onBlur={() => setOpen(false)} onClick={() => void showPreview()} aria-expanded={open}>
+        <ImageIcon size={12} /> Viewed screen
+      </button>
+      {open && (
+        <div className="screen-preview-popover" role="dialog" aria-label="Screen used for this response">
+          <div className="screen-preview-frame">
+            {loading && <span className="screen-preview-message"><LoaderCircle className="spin" size={16} /> Loading preview…</span>}
+            {unavailable && <span className="screen-preview-message">Preview is no longer available.</span>}
+            {previewUrl && <img src={previewUrl} alt="Screen captured for this response" />}
+          </div>
+          <footer><span>{timestamp}</span><span>Not saved to history</span></footer>
+        </div>
+      )}
     </div>
   );
 }
@@ -85,6 +148,14 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
         <span className="eyebrow">Local provider</span>
         <h2>Clarity couldn’t finish that response</h2>
         <p>{state.error}</p>
+        <ViewedScreen state={state} />
+        {state.screenContext.status === "permission-blocked" && ["permission-denied", "permission-not-granted"].includes(state.screenContext.errorCode ?? "") && <button className="secondary-button" type="button" onClick={() => void window.clarityOverlay.openScreenPermissionSettings()}>Open Screen Recording Settings</button>}
+        {state.screenContext.status === "permission-blocked" && <button className="secondary-button" type="button" onClick={async () => {
+          const permission = await window.clarityOverlay.recheckScreenPermission();
+          if (permission === "granted") dispatch({ type: "SUBMIT", prompt: state.prompt });
+        }}>Recheck permission</button>}
+        {state.screenContext.errorCode === "permission-restricted" && <p className="screen-remediation">This Mac is managed. Ask the device administrator to allow Screen Recording, then try again.</p>}
+        {state.screenContext.status === "unsupported" && <button className="secondary-button" type="button" onClick={() => void window.clarityOverlay.openModelSettings()}>Choose a vision model</button>}
         <button className="secondary-button" type="button" onClick={() => dispatch({ type: "SUBMIT", prompt: state.prompt })}><RotateCcw size={14} /> Try again</button>
       </section>
     );
@@ -98,7 +169,7 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
         {loading ? (
           <div className="thinking-state">
             <span className="thinking-mark"><BrandMark size={24} /></span>
-            <div><span className="eyebrow">Working locally</span><h2>Finding the clearest answer…</h2></div>
+            <div><span className="eyebrow">{state.screenContext.status === "capturing" ? "Capturing current display" : "Working locally"}</span><h2>{state.screenContext.status === "capturing" ? "Looking at your screen…" : "Finding the clearest answer…"}</h2></div>
             <div className="shimmer-lines"><i /><i /><i /></div>
           </div>
         ) : (
@@ -119,6 +190,7 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
   return (
     <section className="expanded-content response-state">
       <div className="response-heading"><div><span className="eyebrow">Clarity</span><h2>A focused answer</h2></div><button className="quiet-action" type="button" onClick={() => navigator.clipboard.writeText(state.response)}><Copy size={13} /> Copy</button></div>
+      <ViewedScreen state={state} />
       <ResponseBody text={state.response} />
       <div className="response-footer"><span><ShieldCheck size={13} /> Generated on this Mac</span><button type="button" onClick={() => dispatch({ type: "CLEAR" })}>New question</button></div>
     </section>
@@ -150,6 +222,8 @@ function OverlayApp() {
   const expanded = Boolean(state && isExpanded(state.phase));
   const listening = Boolean(state?.startedAt);
   const duration = useMemo(() => elapsed(state?.startedAt ?? null, now), [state?.startedAt, now]);
+  const usesScreen = Boolean(state?.screenContext.enabled);
+  const capturingScreen = state?.screenContext.status === "capturing";
 
   async function dispatch(action: Record<string, unknown>) {
     setState(await window.clarityOverlay.dispatch(action));
@@ -186,8 +260,16 @@ function OverlayApp() {
             aria-label="Ask Clarity"
             value={draft}
             onChange={(event) => { setDraft(event.target.value); void window.clarityOverlay.dispatch({ type: "SET_PROMPT", prompt: event.target.value }); }}
-            placeholder={listening ? "Ask about this conversation…" : "Ask anything…"}
+            placeholder={usesScreen ? "Ask anything about your screen…" : listening ? "Ask about this conversation…" : "Ask anything…"}
           />
+          <IconButton
+            label={capturingScreen ? "Capturing current display" : usesScreen ? "Uses screen" : "Does not use screen"}
+            active={usesScreen}
+            pressed={usesScreen}
+            onClick={() => dispatch({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: !usesScreen })}
+          >
+            {capturingScreen ? <LoaderCircle className="spin" size={15} /> : <ImageIcon size={15} />}
+          </IconButton>
           <span className="mode-pill"><Sparkles size={11} /> Meeting <ChevronDown size={10} /></span>
           <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch({ type: listening ? "STOP_LISTENING" : "START_LISTENING" })}>
             {listening ? <Square size={13} fill="currentColor" /> : <Mic size={15} />}

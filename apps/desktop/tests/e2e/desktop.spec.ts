@@ -94,3 +94,36 @@ test("fresh launch completes the split onboarding without forced permissions", a
     await rm(userData, { recursive: true, force: true });
   }
 });
+
+test("screen context persists, discloses its preview, and expires on clear", async () => {
+  const { application, userData } = await launch({ CLARITY_TEST_SCREEN_CONTEXT: "1" });
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    const screenToggle = overlay.getByRole("button", { name: "Does not use screen" });
+    await screenToggle.click();
+    await expect(overlay.getByRole("button", { name: "Uses screen" })).toHaveAttribute("aria-pressed", "true");
+
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What is visible on my screen?");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    const viewedScreen = overlay.getByRole("button", { name: "Viewed screen" });
+    await expect(viewedScreen).toBeVisible();
+    const attached = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    const attachmentId = attached.overlay.screenContext.attachmentId;
+    expect(attachmentId).toBeTruthy();
+
+    await viewedScreen.hover();
+    await expect(overlay.getByRole("dialog", { name: "Screen used for this response" })).toBeVisible();
+    await expect(overlay.getByAltText("Screen captured for this response")).toBeVisible();
+
+    await overlay.getByRole("button", { name: "New question" }).click();
+    await expect(viewedScreen).toHaveCount(0);
+    const expired = await overlay.evaluate((id) => window.clarityOverlay.getScreenPreview(id), attachmentId!);
+    expect(expired).toBeNull();
+    const cleared = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(cleared.overlay.screenContext.enabled).toBe(true);
+    expect(cleared.settings.preferences.screenContextEnabled).toBe(true);
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});

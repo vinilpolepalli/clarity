@@ -17,6 +17,16 @@ export interface OverlayState {
   selectedHistoryId: string | null;
   requestId: string | null;
   startedAt: number | null;
+  screenContext: {
+    enabled: boolean;
+    status: "idle" | "capturing" | "attached" | "permission-blocked" | "unsupported" | "error";
+    capability: "supported" | "unsupported" | "unknown";
+    attachmentId: string | null;
+    capturedAt: number | null;
+    displayId: string | null;
+    errorCode: string | null;
+    error: string | null;
+  };
 }
 
 export interface HistoryItem {
@@ -39,8 +49,11 @@ export interface Preferences {
   outputLanguage: string;
   microphoneId: string;
   captureSystemAudio: boolean;
+  screenContextEnabled: boolean;
   provider: string;
   model: string;
+  providerModels: Record<string, string>;
+  imageInputOverrides: Record<string, boolean>;
   mode: string;
   selectedSettingsTab: string;
   cloudEnabled: boolean;
@@ -54,6 +67,12 @@ export interface SettingsModel {
   app: { version: string; packaged: boolean; demo: boolean };
   onboarding: boolean;
   keyConfigured: Record<string, boolean>;
+  imageInput: {
+    capability: "supported" | "unsupported" | "unknown";
+    endpointIdentity: string;
+    overrideKey: string;
+    explicitOverride: boolean | null;
+  };
 }
 
 declare global {
@@ -63,6 +82,10 @@ declare global {
       dispatch(action: Record<string, unknown>): Promise<OverlayState>;
       getHistory(): Promise<HistoryItem[]>;
       openSettings(): Promise<boolean>;
+      openModelSettings(): Promise<boolean>;
+      getScreenPreview(attachmentId: string): Promise<{ mediaType: "image/png" | "image/jpeg"; bytes: Uint8Array } | null>;
+      openScreenPermissionSettings(): Promise<boolean>;
+      recheckScreenPermission(): Promise<string>;
       onState(listener: (state: OverlayState) => void): () => void;
       testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel }>;
       testSetBounds?(bounds: Partial<{ x: number; y: number; width: number; height: number }>): Promise<{ x: number; y: number; width: number; height: number }>;

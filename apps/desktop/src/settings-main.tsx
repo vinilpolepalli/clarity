@@ -120,7 +120,7 @@ function Onboarding({ model, onComplete, onModel }: { model: SettingsModel; onCo
   const permissionItems = [
     { id: "accessibility" as const, icon: <Accessibility size={18} />, title: "Accessibility", copy: "Lets the global shortcut bring Clarity forward while you work." },
     { id: "microphone" as const, icon: <Mic size={18} />, title: "Microphone", copy: "Captures your voice only while listening is visibly active." },
-    { id: "screen" as const, icon: <MonitorUp size={18} />, title: "Screen & system audio", copy: "Captures meeting audio. Screen pixels are never stored by default." }
+    { id: "screen" as const, icon: <MonitorUp size={18} />, title: "Screen & system audio", copy: "Captures meeting audio and, only when you enable Uses screen, a fresh screenshot for your question." }
   ];
 
   async function request(capability: "accessibility" | "microphone" | "screen") {
@@ -174,6 +174,21 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   const [message, setMessage] = useState("");
   const provider = preferences.provider;
   const needsKey = provider !== "demo";
+  const imageCapabilityLabel = model.imageInput.capability === "supported" ? "Supported" : model.imageInput.capability === "unsupported" ? "Not supported" : "Unverified";
+  const showImageOverride = model.imageInput.capability === "unknown" || model.imageInput.explicitOverride !== null;
+  function setImageOverride(enabled: boolean) {
+    const next = { ...preferences.imageInputOverrides };
+    if (enabled) next[model.imageInput.overrideKey] = true;
+    else delete next[model.imageInput.overrideKey];
+    update({ imageInputOverrides: next });
+  }
+  function setProvider(value: string) {
+    const providerModels = { ...preferences.providerModels, [provider]: preferences.model };
+    update({ provider: value, model: providerModels[value] ?? "", providerModels });
+  }
+  function setModelId(value: string) {
+    update({ model: value, providerModels: { ...preferences.providerModels, [provider]: value } });
+  }
   async function saveKey() {
     try {
       setModel(await window.claritySettings.saveProviderKey(provider, key));
@@ -182,8 +197,10 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   }
   return <><PageTitle eyebrow="Bring your own key" title="Models" description="Inference runs from this desktop. Provider credentials are never synced." />
     <Section title="Provider">
-      <SettingRow icon={<WandSparkles size={16} />} title="Inference provider" description="The demo provider is deterministic and works offline."><Select label="Provider" value={provider} onChange={(value) => update({ provider: value, model: value === "demo" ? "clarity-demo" : value === "anthropic" ? "claude-sonnet" : value === "nvidia" ? "meta/llama-3.3-70b-instruct" : "gpt-4.1-mini" })} options={[{ value: "demo", label: "Clarity Demo" }, { value: "nvidia", label: "NVIDIA NIM" }, { value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }]} /></SettingRow>
-      <SettingRow icon={<Sparkles size={16} />} title="Model" description="Choose a fast model for live assistance."><input className="settings-input compact" value={preferences.model} onChange={(event) => update({ model: event.target.value })} aria-label="Model identifier" /></SettingRow>
+      <SettingRow icon={<WandSparkles size={16} />} title="Inference provider" description="The demo provider is deterministic and works offline."><Select label="Provider" value={provider} onChange={setProvider} options={[{ value: "demo", label: "Clarity Demo" }, { value: "nvidia", label: "NVIDIA NIM" }, { value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }]} /></SettingRow>
+      <SettingRow icon={<Sparkles size={16} />} title="Model" description="Choose a fast model for live assistance."><input className="settings-input compact" value={preferences.model} onChange={(event) => setModelId(event.target.value)} aria-label="Model identifier" /></SettingRow>
+      <SettingRow icon={<MonitorUp size={16} />} title="Image input" description="Screen context is sent only when this endpoint and model are authorized."><span className={`capability-badge is-${model.imageInput.capability}`}>{imageCapabilityLabel}</span></SettingRow>
+      {showImageOverride && <SettingRow icon={<ShieldCheck size={16} />} title="This model accepts image inputs" description="Confirm only if this exact provider endpoint documents image support."><Toggle label="This model accepts image inputs" checked={model.imageInput.explicitOverride === true} onChange={setImageOverride} /></SettingRow>}
     </Section>
     {needsKey && <Section title="Provider key" description="Clarity stores this secret directly in macOS Keychain. It is never written to preferences or logs.">
       <div className="credential-panel"><div><span className={`credential-status ${model.keyConfigured[provider] ? "is-set" : ""}`}><KeyRound size={14} />{model.keyConfigured[provider] ? "Key configured" : "No key configured"}</span><input className="settings-input" type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} placeholder={`Paste ${provider} API key`} /></div><button className="secondary-button" type="button" disabled={!key.trim()} onClick={saveKey}>Save to Keychain</button>{model.keyConfigured[provider] && <button className="danger-text-button" type="button" onClick={async () => setModel(await window.claritySettings.deleteProviderKey(provider))}>Remove</button>}</div>{message && <p className="inline-message">{message}</p>}
@@ -222,7 +239,7 @@ function CloudPage({ preferences, update }: PageProps) {
 }
 
 function PrivacyPage({ preferences, update }: PageProps) {
-  return <><PageTitle eyebrow="Best-effort protection" title="Privacy" description="Clarity minimizes exposure and explains OS limits honestly. No desktop app can guarantee invisibility." /><Section title="Overlay protection"><SettingRow icon={<ShieldCheck size={16} />} title="Protect overlay content" description="Ask macOS to omit the overlay from many common captures. Some apps and external cameras may still record it."><Toggle label="Protect overlay content" checked={preferences.protectOverlayContent} onChange={(value) => update({ protectOverlayContent: value })} /></SettingRow></Section><Section title="Local data"><SettingRow icon={<Laptop size={16} />} title="Session storage" description="Transcripts, answers, and search index live in your user data directory."><span className="local-badge">On this Mac</span></SettingRow><SettingRow icon={<RotateCcw size={16} />} title="Retention" description="Automatic deletion policy for completed sessions."><Select label="Retention" value="forever" onChange={() => {}} options={[{ value: "forever", label: "Keep until deleted" }, { value: "30", label: "30 days" }, { value: "7", label: "7 days" }]} /></SettingRow></Section><div className="callout warning"><MonitorUp size={17} /><div><strong>Screen pixels are not stored by default</strong><p>Screen Recording permission is used for system audio. Capture is visibly indicated, and denial leaves the rest of the app usable.</p></div></div></>;
+  return <><PageTitle eyebrow="Best-effort protection" title="Privacy" description="Clarity minimizes exposure and explains OS limits honestly. No desktop app can guarantee invisibility." /><Section title="Screen context"><SettingRow icon={<MonitorUp size={16} />} title="Allow screen context" description="When enabled, each question captures the current display and sends it directly to your selected vision model."><Toggle label="Allow screen context" checked={preferences.screenContextEnabled} onChange={(value) => update({ screenContextEnabled: value })} /></SettingRow></Section><Section title="Overlay protection"><SettingRow icon={<ShieldCheck size={16} />} title="Protect overlay content" description="Ask macOS to omit the overlay from many common captures. Some apps and external cameras may still record it."><Toggle label="Protect overlay content" checked={preferences.protectOverlayContent} onChange={(value) => update({ protectOverlayContent: value })} /></SettingRow></Section><Section title="Local data"><SettingRow icon={<Laptop size={16} />} title="Session storage" description="Transcripts, answers, and search index live in your user data directory."><span className="local-badge">On this Mac</span></SettingRow><SettingRow icon={<RotateCcw size={16} />} title="Retention" description="Automatic deletion policy for completed sessions."><Select label="Retention" value="forever" onChange={() => {}} options={[{ value: "forever", label: "Keep until deleted" }, { value: "30", label: "30 days" }, { value: "7", label: "7 days" }]} /></SettingRow></Section><div className="callout"><MonitorUp size={17} /><div><strong>Screen pixels are ephemeral</strong><p>When Uses screen is enabled, one fresh screenshot is sent directly to your selected provider. Clarity does not save it to history or cloud sync.</p></div></div></>;
 }
 
 function IntegrationsPage({ preferences, update }: PageProps) {

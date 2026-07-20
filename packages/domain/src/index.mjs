@@ -22,8 +22,16 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   outputLanguage: "English",
   microphoneId: "default",
   captureSystemAudio: true,
+  screenContextEnabled: false,
   provider: "demo",
   model: "clarity-demo",
+  providerModels: {
+    demo: "clarity-demo",
+    nvidia: "meta/llama-3.2-11b-vision-instruct",
+    openai: "gpt-4.1-mini",
+    anthropic: "claude-sonnet"
+  },
+  imageInputOverrides: {},
   mode: "meeting",
   selectedSettingsTab: "general",
   cloudEnabled: false,
@@ -59,7 +67,7 @@ export const DEMO_HISTORY = Object.freeze([
   }
 ]);
 
-export function createInitialOverlayState(visible = true) {
+export function createInitialOverlayState(visible = true, screenContextEnabled = false) {
   return {
     version: 1,
     phase: visible ? "compact-idle" : "hidden",
@@ -69,7 +77,17 @@ export function createInitialOverlayState(visible = true) {
     error: null,
     selectedHistoryId: null,
     requestId: null,
-    startedAt: null
+    startedAt: null,
+    screenContext: {
+      enabled: Boolean(screenContextEnabled),
+      status: "idle",
+      capability: "unknown",
+      attachmentId: null,
+      capturedAt: null,
+      displayId: null,
+      errorCode: null,
+      error: null
+    }
   };
 }
 
@@ -88,12 +106,18 @@ export function mergePreferences(value) {
   const candidate = value && typeof value === "object" ? value : {};
   const keybindings = candidate.keybindings && typeof candidate.keybindings === "object" ? candidate.keybindings : {};
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
+  const imageInputOverrides = candidate.imageInputOverrides && typeof candidate.imageInputOverrides === "object" ? candidate.imageInputOverrides : {};
+  const candidateProviderModels = candidate.providerModels && typeof candidate.providerModels === "object" ? candidate.providerModels : {};
+  const providerModels = { ...DEFAULT_PREFERENCES.providerModels, ...candidateProviderModels };
+  if (candidate.provider && candidate.model && !Object.hasOwn(candidateProviderModels, candidate.provider)) providerModels[candidate.provider] = candidate.model;
   return {
     ...DEFAULT_PREFERENCES,
     ...candidate,
     version: 1,
     keybindings: { ...DEFAULT_PREFERENCES.keybindings, ...keybindings },
-    integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations }
+    integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations },
+    providerModels,
+    imageInputOverrides: { ...imageInputOverrides }
   };
 }
 
@@ -111,19 +135,74 @@ export function reduceOverlay(state, event) {
       return state.phase === "hidden" ? reduceOverlay(state, { type: "SHOW" }) : reduceOverlay(state, { type: "HIDE" });
     case "SET_PROMPT":
       return { ...state, prompt: String(event.prompt ?? "").slice(0, 8_000) };
+    case "SET_SCREEN_CONTEXT_ENABLED":
+      {
+      const keepActiveAttachment = state.screenContext.status === "attached" && state.screenContext.attachmentId;
+      return {
+        ...state,
+        screenContext: {
+          ...state.screenContext,
+          enabled: Boolean(event.enabled),
+          status: keepActiveAttachment ? "attached" : "idle",
+          attachmentId: keepActiveAttachment ? state.screenContext.attachmentId : null,
+          capturedAt: keepActiveAttachment ? state.screenContext.capturedAt : null,
+          displayId: keepActiveAttachment ? state.screenContext.displayId : null,
+          errorCode: null,
+          error: null
+        }
+      };
+      }
+    case "SET_SCREEN_CAPABILITY":
+      return { ...state, screenContext: { ...state.screenContext, capability: event.capability ?? "unknown" } };
+    case "SCREEN_CAPTURE_STARTED":
+      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      return { ...state, screenContext: { ...state.screenContext, status: "capturing", attachmentId: null, capturedAt: null, displayId: null, errorCode: null, error: null } };
+    case "SCREEN_CAPTURE_ATTACHED":
+      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      return {
+        ...state,
+        screenContext: {
+          ...state.screenContext,
+          status: "attached",
+          attachmentId: String(event.attachmentId ?? ""),
+          capturedAt: Number(event.capturedAt ?? Date.now()),
+          displayId: String(event.displayId ?? ""),
+          errorCode: null,
+          error: null
+        }
+      };
+    case "SCREEN_CAPTURE_FAILED":
+      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      return {
+        ...state,
+        screenContext: {
+          ...state.screenContext,
+          status: event.status === "permission-blocked" || event.status === "unsupported" ? event.status : "error",
+          attachmentId: null,
+          capturedAt: null,
+          displayId: null,
+          errorCode: String(event.errorCode ?? "capture-failed"),
+          error: String(event.error ?? "Screen context could not be captured.")
+        }
+      };
+    case "SCREEN_CAPTURE_CLEARED":
+      return {
+        ...state,
+        screenContext: { ...state.screenContext, status: "idle", attachmentId: null, capturedAt: null, displayId: null, errorCode: null, error: null }
+      };
     case "SUBMIT": {
       const prompt = String(event.prompt ?? state.prompt).trim().slice(0, 8_000);
       if (!prompt) return { ...state, phase: "expanded-empty", response: "", error: null };
       return { ...state, phase: "expanded-empty", prompt, response: "", error: null, requestId: String(event.requestId ?? crypto.randomUUID()) };
     }
     case "RESOLVE":
-      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      if (event.requestId && event.requestId !== state.requestId) return state;
       return { ...state, phase: "expanded-response", response: String(event.response ?? ""), error: null, requestId: null };
     case "STREAM":
-      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      if (event.requestId && event.requestId !== state.requestId) return state;
       return { ...state, phase: "expanded-response", response: String(event.response ?? ""), error: null };
     case "FAIL":
-      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      if (event.requestId && event.requestId !== state.requestId) return state;
       return { ...state, phase: "expanded-error", error: String(event.error ?? "Something went wrong."), requestId: null };
     case "EXPAND":
       return { ...state, phase: state.response ? "expanded-response" : "expanded-empty" };
@@ -138,7 +217,7 @@ export function reduceOverlay(state, event) {
     case "SELECT_HISTORY":
       return { ...state, phase: "expanded-history", selectedHistoryId: String(event.id ?? "") };
     case "CLEAR":
-      return { ...createInitialOverlayState(true), startedAt: state.startedAt };
+      return { ...createInitialOverlayState(true, state.screenContext.enabled), startedAt: state.startedAt, screenContext: { ...createInitialOverlayState(true, state.screenContext.enabled).screenContext, capability: state.screenContext.capability } };
     default:
       return state;
   }
