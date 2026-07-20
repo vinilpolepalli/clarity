@@ -77,34 +77,71 @@ function validateImage(image) {
   return { mediaType: image.mediaType, base64 };
 }
 
-export function buildProviderRequest({ provider, model, prompt, key, image }) {
+export function boundedConversationMessages(messages, { maxMessages = 24, maxCharacters = 18_000 } = {}) {
+  const normalized = (Array.isArray(messages) ? messages : [])
+    .filter((item) => item?.role === "user" || item?.role === "assistant")
+    .map((item) => ({ role: item.role, content: String(item.content ?? "").trim().slice(0, 12_000) }))
+    .filter((item) => item.content);
+  const selected = [];
+  let characters = 0;
+  for (let index = normalized.length - 1; index >= 0 && selected.length < maxMessages; index -= 1) {
+    const item = normalized[index];
+    const remaining = maxCharacters - characters;
+    if (remaining <= 0) break;
+    if (item.content.length > remaining) {
+      if (!selected.length) selected.unshift({ ...item, content: item.content.slice(0, remaining) });
+      break;
+    }
+    selected.unshift(item);
+    characters += item.content.length;
+  }
+  while (selected[0]?.role === "assistant") selected.shift();
+  return selected;
+}
+
+function attachImageToLatestUser(conversation, screenshot, provider) {
+  if (!screenshot) return conversation;
+  const lastUserIndex = conversation.findLastIndex((item) => item.role === "user");
+  return conversation.map((item, index) => {
+    if (index !== lastUserIndex) return item;
+    if (provider === "anthropic") {
+      return {
+        ...item,
+        content: [
+          { type: "image", source: { type: "base64", media_type: screenshot.mediaType, data: screenshot.base64 } },
+          { type: "text", text: item.content }
+        ]
+      };
+    }
+    return {
+      ...item,
+      content: [
+        { type: "text", text: item.content },
+        { type: "image_url", image_url: { url: `data:${screenshot.mediaType};base64,${screenshot.base64}` } }
+      ]
+    };
+  });
+}
+
+export function buildProviderRequest({ provider, model, messages, prompt, key, image }) {
   const definition = providerDefinition(provider);
   const screenshot = validateImage(image);
   const headers = { "content-type": "application/json" };
+  const conversation = boundedConversationMessages(messages?.length ? messages : [{ role: "user", content: prompt }]);
+  if (!conversation.length) throw new Error("A provider request requires at least one user message");
+  const providerMessages = attachImageToLatestUser(conversation, screenshot, provider);
   if (provider === "anthropic") {
     headers[definition.header] = key;
     headers["anthropic-version"] = "2023-06-01";
-    const content = screenshot
-      ? [
-          { type: "image", source: { type: "base64", media_type: screenshot.mediaType, data: screenshot.base64 } },
-          { type: "text", text: prompt }
-        ]
-      : prompt;
     return {
       url: definition.endpoint,
-      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 900, stream: true, system: systemPrompt(Boolean(screenshot)), messages: [{ role: "user", content }] }) }
+      init: { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 900, stream: true, system: systemPrompt(Boolean(screenshot)), messages: providerMessages }) }
     };
   }
   headers[definition.header] = `Bearer ${key}`;
-  const content = screenshot
-    ? [
-        { type: "text", text: prompt },
-        { type: "image_url", image_url: { url: `data:${screenshot.mediaType};base64,${screenshot.base64}` } }
-      ]
-    : prompt;
   return {
     url: definition.endpoint,
-    init: { method: "POST", headers, body: JSON.stringify({ model, stream: true, temperature: 0.2, messages: [{ role: "system", content: systemPrompt(Boolean(screenshot)) }, { role: "user", content }] }) }
+    init: { method: "POST", headers, body: JSON.stringify({ model, stream: true, temperature: 0.2, messages: [{ role: "system", content: systemPrompt(Boolean(screenshot)) }, ...providerMessages] }) }
   };
 }
 

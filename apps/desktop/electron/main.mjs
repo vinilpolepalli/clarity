@@ -38,6 +38,7 @@ const APP_ROOT = join(import.meta.dirname, "..");
 const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo");
 const isTest = process.env.CLARITY_TEST === "1";
 const testOnboarding = process.env.CLARITY_TEST_ONBOARDING === "1";
+const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
 
 app.setName("Clarity");
 if (isTest && process.env.CLARITY_TEST_USER_DATA) app.setPath("userData", process.env.CLARITY_TEST_USER_DATA);
@@ -61,12 +62,125 @@ let capture = null;
 let screenContext = null;
 const recentAudio = new RollingAudioBuffer();
 
-async function persistResponse(prompt, response) {
-  if (!storage || !response) return;
-  const id = crypto.randomUUID();
-  const title = prompt.trim().slice(0, 72) || "Untitled session";
-  try { await storage.call("create", { id, title, prompt, response, mode: preferences.mode }); }
-  catch (error) { console.warn("Could not persist the local response:", error.message); }
+async function persistConversationMessage(conversationId, message, sequence) {
+  if (!storage) return;
+  await storage.call("appendMessage", {
+    id: message.id,
+    sessionId: conversationId,
+    sequence,
+    role: message.role,
+    content: message.content,
+    status: "complete",
+    createdAt: message.createdAt
+  });
+}
+
+function delay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+async function runConversationInference({ requestId, createConversation, persistUser }) {
+  const snapshot = structuredClone(overlayState);
+  const conversationId = snapshot.conversationId;
+  const assistantIndex = snapshot.messages.findIndex((item) => item.id === snapshot.activeAssistantMessageId);
+  const assistantMessage = snapshot.messages[assistantIndex];
+  const userIndex = [...snapshot.messages].map((item) => item.role).lastIndexOf("user");
+  const userMessage = snapshot.messages[userIndex];
+  const providerMessages = snapshot.messages
+    .filter((item) => (item.role === "user" || item.role === "assistant") && item.content && item.status !== "error")
+    .map(({ role, content }) => ({ role, content }));
+  const inference = activeInference;
+  const targetDisplayId = String(screen.getDisplayMatching(overlayWindow.getBounds()).id);
+  const request = {
+    requestId,
+    provider: preferences.provider,
+    model: preferences.model,
+    imageCapability: currentImageInput().capability,
+    screenContextEnabled: Boolean(preferences.screenContextEnabled),
+    targetDisplayId
+  };
+  activeSubmission = { requestId, phase: request.screenContextEnabled ? "capturing" : "transmitting" };
+  screenContext?.clear();
+  dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
+  dispatchOverlay({ type: "SET_SCREEN_CAPABILITY", capability: request.imageCapability }, { animate: false });
+
+  try {
+    if (createConversation) {
+      await storage?.call("createConversation", {
+        id: conversationId,
+        title: snapshot.conversationTitle || "Untitled conversation",
+        mode: preferences.mode
+      });
+    }
+    if (persistUser && userMessage) await persistConversationMessage(conversationId, userMessage, userIndex);
+
+    let image;
+    if (request.screenContextEnabled) {
+      if (request.imageCapability !== "supported") {
+        const unknown = request.imageCapability === "unknown";
+        const message = unknown
+          ? "Confirm that this exact model accepts image inputs in Models settings before using screen context."
+          : "The selected model does not accept image inputs. Choose a vision model or turn off Uses screen.";
+        dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: "unsupported", errorCode: unknown ? "capability-unknown" : "model-unsupported", error: message }, { animate: false });
+        dispatchOverlay({ type: "FAIL", requestId, error: message });
+        return;
+      }
+      dispatchOverlay({ type: "SCREEN_CAPTURE_STARTED", requestId }, { animate: false });
+      const metadata = await screenContext.capture(requestId, request, { signal: inference.signal });
+      if (overlayState.requestId !== requestId) return;
+      dispatchOverlay({ type: "SCREEN_CAPTURE_ATTACHED", requestId, attachmentId: metadata.id, capturedAt: metadata.capturedAt, displayId: metadata.displayId }, { animate: false });
+      image = screenContext.readForProvider(requestId);
+      if (!image) throw new ScreenContextError("attachment-expired", "The screen capture expired before it could be sent. Try again.");
+    }
+
+    if (activeSubmission?.requestId === requestId) activeSubmission.phase = "transmitting";
+    let response;
+    if (request.provider === "demo") {
+      const milliseconds = Number.isFinite(testInferenceDelay) && testInferenceDelay >= 0
+        ? testInferenceDelay
+        : preferences.reduceMotion ? 80 : 680;
+      await delay(milliseconds, inference.signal);
+      response = demoResponse(userMessage?.content ?? snapshot.lastPrompt);
+    } else {
+      const key = await readProviderKey(request.provider);
+      response = await streamProviderResponse({
+        provider: request.provider,
+        model: request.model,
+        messages: providerMessages,
+        key,
+        image,
+        signal: inference.signal,
+        onToken: (_token, accumulated) => dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false })
+      });
+    }
+
+    if (overlayState.requestId !== requestId) return;
+    await persistConversationMessage(conversationId, { ...assistantMessage, content: response }, assistantIndex);
+    dispatchOverlay({ type: "RESOLVE", requestId, response });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      if (activeSubmission?.requestId === requestId && activeSubmission.phase === "capturing") {
+        screenContext?.clear(requestId);
+        dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
+      }
+      return;
+    }
+    if (error instanceof ScreenContextError) {
+      dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: screenFailureStatus(error), errorCode: error.code, error: error.message }, { animate: false });
+    } else if (request.screenContextEnabled && overlayState.screenContext.status === "capturing") {
+      dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: "error", errorCode: "capture-failed", error: "Clarity could not capture the current display. Try again." }, { animate: false });
+    }
+    dispatchOverlay({ type: "FAIL", requestId, error: error instanceof Error ? error.message : "Clarity could not finish that response." });
+  } finally {
+    if (activeSubmission?.requestId === requestId) activeSubmission = null;
+    if (activeInference === inference) activeInference = null;
+  }
 }
 
 function rendererTarget(page) {
@@ -157,6 +271,8 @@ function applyOverlayPresentation(previousPhase, animate = true) {
 
 function dispatchOverlay(event, options = {}) {
   const previousPhase = overlayState.phase;
+  const previousRequestId = overlayState.requestId;
+  const previousConversationId = overlayState.conversationId;
   overlayState = reduceOverlay(overlayState, event);
   applyOverlayPresentation(previousPhase, options.animate !== false);
   sendOverlayState();
@@ -169,11 +285,25 @@ function dispatchOverlay(event, options = {}) {
   }
   if (event.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
 
-  if (event.type === "SUBMIT" && overlayState.requestId) void submitCurrentRequest(overlayState.requestId, overlayState.prompt);
-  if (event.type === "CLEAR") {
+  if (event.type === "CLEAR" || event.type === "LOAD_CONVERSATION") {
     screenContext?.clear();
     activeInference?.abort();
     activeSubmission = null;
+    if (event.type === "LOAD_CONVERSATION") {
+      overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+      sendOverlayState();
+    }
+  }
+
+  if ((event.type === "SUBMIT" || event.type === "RETRY") && overlayState.requestId && overlayState.requestId !== previousRequestId) {
+    const requestId = overlayState.requestId;
+    activeInference?.abort();
+    activeInference = new AbortController();
+    void runConversationInference({
+      requestId,
+      createConversation: event.type === "SUBMIT" && !previousConversationId,
+      persistUser: event.type === "SUBMIT"
+    });
   }
   return structuredClone(overlayState);
 }
@@ -181,87 +311,6 @@ function dispatchOverlay(event, options = {}) {
 function screenFailureStatus(error) {
   if (error instanceof ScreenContextError && error.code.startsWith("permission-")) return "permission-blocked";
   return "error";
-}
-
-async function submitCurrentRequest(requestId, prompt) {
-  activeInference?.abort();
-  screenContext?.clear();
-  activeInference = new AbortController();
-  const inference = activeInference;
-  const targetDisplayId = String(screen.getDisplayMatching(overlayWindow.getBounds()).id);
-  const snapshot = {
-    requestId,
-    prompt,
-    provider: preferences.provider,
-    model: preferences.model,
-    imageCapability: currentImageInput().capability,
-    screenContextEnabled: Boolean(preferences.screenContextEnabled),
-    targetDisplayId
-  };
-  activeSubmission = { requestId, phase: snapshot.screenContextEnabled ? "capturing" : "transmitting" };
-  dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
-  dispatchOverlay({ type: "SET_SCREEN_CAPABILITY", capability: snapshot.imageCapability }, { animate: false });
-
-  try {
-    let image;
-    if (snapshot.screenContextEnabled) {
-      if (snapshot.imageCapability !== "supported") {
-        const unknown = snapshot.imageCapability === "unknown";
-        const message = unknown
-          ? "Confirm that this exact model accepts image inputs in Models settings before using screen context."
-          : "The selected model does not accept image inputs. Choose a vision model or turn off Uses screen.";
-        dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: "unsupported", errorCode: unknown ? "capability-unknown" : "model-unsupported", error: message }, { animate: false });
-        dispatchOverlay({ type: "FAIL", requestId, error: message });
-        return;
-      }
-      dispatchOverlay({ type: "SCREEN_CAPTURE_STARTED", requestId }, { animate: false });
-      const metadata = await screenContext.capture(requestId, snapshot, { signal: inference.signal });
-      if (overlayState.requestId !== requestId) return;
-      dispatchOverlay({ type: "SCREEN_CAPTURE_ATTACHED", requestId, attachmentId: metadata.id, capturedAt: metadata.capturedAt, displayId: metadata.displayId }, { animate: false });
-      image = screenContext.readForProvider(requestId);
-      if (!image) throw new ScreenContextError("attachment-expired", "The screen capture expired before it could be sent. Try again.");
-    }
-
-    activeSubmission.phase = "transmitting";
-    if (snapshot.provider === "demo") {
-      await new Promise((resolve) => setTimeout(resolve, preferences.reduceMotion ? 80 : 680));
-      if (inference.signal.aborted) throw new DOMException("Aborted", "AbortError");
-      const response = demoResponse(prompt);
-      dispatchOverlay({ type: "RESOLVE", requestId, response });
-      void persistResponse(prompt, response);
-      return;
-    }
-
-    const key = await readProviderKey(snapshot.provider);
-    const response = await streamProviderResponse({
-      provider: snapshot.provider,
-      model: snapshot.model,
-      prompt,
-      key,
-      image,
-      signal: inference.signal,
-      onToken: (_token, accumulated) => dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false })
-    });
-    dispatchOverlay({ type: "RESOLVE", requestId, response });
-    void persistResponse(prompt, response);
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      if (activeSubmission?.requestId === requestId && activeSubmission.phase === "capturing") {
-        screenContext?.clear(requestId);
-        dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
-      }
-      return;
-    }
-    if (error instanceof ScreenContextError) {
-      dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: screenFailureStatus(error), errorCode: error.code, error: error.message }, { animate: false });
-    } else if (snapshot.screenContextEnabled && overlayState.screenContext.status === "capturing") {
-      dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: "error", errorCode: "capture-failed", error: "Clarity could not capture the current display. Try again." }, { animate: false });
-    }
-    dispatchOverlay({ type: "FAIL", requestId, error: error instanceof Error ? error.message : "Clarity could not finish that response." });
-  } finally {
-    if (activeSubmission?.requestId === requestId) activeSubmission = null;
-    if (activeInference === inference) activeInference = null;
-  }
 }
 
 async function setScreenContextEnabled(enabled) {
@@ -418,6 +467,24 @@ function registerIpc() {
   ipcMain.handle("overlay:get-history", async () => {
     const local = storage ? await storage.call("list", { limit: 50 }) : [];
     return local.length ? local : structuredClone(DEMO_HISTORY);
+  });
+  ipcMain.handle("overlay:get-conversation", async (_event, id) => {
+    const local = storage ? await storage.call("get", { id }) : null;
+    if (local) return local;
+    const demo = DEMO_HISTORY.find((item) => item.id === id);
+    if (!demo) return null;
+    const createdAt = new Date().toISOString();
+    const messages = [
+      demo.prompt ? { id: `${demo.id}-user`, role: "user", content: demo.prompt, status: "complete", createdAt } : null,
+      demo.response ? { id: `${demo.id}-assistant`, role: "assistant", content: demo.response, status: "complete", createdAt } : null
+    ].filter(Boolean);
+    const conversation = {
+      id: demo.id,
+      title: demo.title,
+      messages
+    };
+    if (!storage) return conversation;
+    return storage.call("ensureConversation", { ...conversation, mode: preferences.mode });
   });
   ipcMain.handle("overlay:open-settings", () => { createSettingsWindow(); return true; });
   ipcMain.handle("overlay:open-model-settings", async () => {
