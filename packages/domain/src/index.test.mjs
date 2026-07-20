@@ -91,6 +91,15 @@ describe("portable contracts", () => {
     expect(preferences.customModels.openai).toEqual([]);
   });
 
+  it("bounds saved custom models and ignores malformed provider collections", () => {
+    const models = Array.from({ length: 25 }, (_, index) => `custom/model-${index}`);
+    models[3] = "x".repeat(161);
+    const preferences = mergePreferences({ customModels: { nvidia: models, openai: "not-an-array" } });
+    expect(preferences.customModels.nvidia).toHaveLength(20);
+    expect(preferences.customModels.nvidia).not.toContain("x".repeat(161));
+    expect(preferences.customModels.openai).toEqual([]);
+  });
+
   it("provides a deterministic offline response", () => {
     expect(demoResponse("What is next?")).toContain("focused sequence");
   });
