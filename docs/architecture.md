@@ -22,15 +22,17 @@ Settings renderer ─ settings ─┤
 
 ## Overlay state and geometry
 
-`@clarity/domain` defines the exhaustive phase union and pure reducer. `@clarity/windowing` defines compact/expanded dimensions, display clamping, bottom-edge growth direction, and collapse restoration. The main process applies those outputs with native `BrowserWindow.setBounds`; the React renderer cannot resize or show a window directly.
+`@clarity/domain` defines the exhaustive phase union, ordered conversation messages, and pure reducer. `@clarity/windowing` defines compact/expanded dimensions, display clamping, bottom-edge growth direction, and collapse restoration. The main process applies those outputs with native `BrowserWindow.setBounds`; the React renderer cannot resize or show a window directly.
 
 Compact width and position are stored independently from expanded height. Expansion keeps x, width, and top edge when there is room, and grows upward near the bottom of the work area. User resize is enabled only while expanded.
 
 ## Local data
 
-The utility-process database uses a versioned migration table, WAL, foreign keys, FTS5, and transactions that update a session and its search row together. Preferences are a separate small JSON document written atomically with mode `0600`; secrets never enter it.
+The utility-process database uses a versioned migration table, WAL, foreign keys, FTS5, and one ordered `conversation_messages` stream per session. Appending a turn and rebuilding that conversation's search row happen in one transaction. Session rows remain the conversation headers while new and resumed chats use the message stream. Preferences are a separate small JSON document written atomically with mode `0600`; secrets never enter it.
 
 Provider keys use the macOS `security` command against a dedicated generic-password service. The renderer can save, delete, and check presence but cannot read a stored key.
+
+Provider calls receive the current conversation rather than only the newest prompt. The desktop bounds context to the latest 24 messages and 18,000 characters before sending it, so follow-ups retain useful history without allowing a thread to grow requests indefinitely.
 
 ## Capture and transcription
 
