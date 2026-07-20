@@ -8,15 +8,34 @@ export type OverlayPhase =
   | "expanded-history";
 
 export interface OverlayState {
-  version: 1;
+  version: 2;
   phase: OverlayPhase;
   previousVisiblePhase: OverlayPhase;
   prompt: string;
   response: string;
+  conversationId: string | null;
+  conversationTitle: string;
+  messages: ConversationMessage[];
   error: string | null;
   selectedHistoryId: string | null;
   requestId: string | null;
+  activeAssistantMessageId: string | null;
+  lastPrompt: string;
   startedAt: number | null;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  status: "streaming" | "complete" | "error";
+  createdAt: string;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  messages: ConversationMessage[];
 }
 
 export interface HistoryItem {
@@ -24,7 +43,7 @@ export interface HistoryItem {
   title: string;
   timestamp: string;
   excerpt: string;
-  response: string;
+  messageCount?: number;
 }
 
 export interface Preferences {
@@ -89,6 +108,7 @@ declare global {
       getState(): Promise<OverlayState>;
       dispatch(action: Record<string, unknown>): Promise<OverlayState>;
       getHistory(): Promise<HistoryItem[]>;
+      getConversation(id: string): Promise<Conversation | null>;
       openSettings(): Promise<boolean>;
       onState(listener: (state: OverlayState) => void): () => void;
       testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel }>;
