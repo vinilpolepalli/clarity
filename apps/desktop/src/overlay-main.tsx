@@ -8,6 +8,7 @@ import {
   Copy,
   Grid2X2,
   History,
+  MessageSquarePlus,
   Mic,
   MicOff,
   Move,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
 import { ModePicker } from "./ModePicker";
-import type { HistoryItem, ModeModel, OverlayState } from "./bridge";
+import type { Conversation, ConversationMessage, HistoryItem, ModeModel, OverlayState } from "./bridge";
 import "./styles.css";
 
 const isExpanded = (phase: string) => phase.startsWith("expanded-");
@@ -51,30 +52,51 @@ function ResponseBody({ text }: { text: string }) {
   );
 }
 
-function ExpandedBody({ state, history, dispatch }: { state: OverlayState; history: HistoryItem[]; dispatch: (action: Record<string, unknown>) => void }) {
+function ConversationTurn({ message, error, retry }: { message: ConversationMessage; error: string | null; retry: () => void }) {
+  if (message.role === "user") return <div className="chat-turn user-turn"><div className="user-bubble">{message.content}</div></div>;
+  const streamingEmpty = message.status === "streaming" && !message.content;
+  return (
+    <div className={`chat-turn assistant-turn ${message.status === "error" ? "has-error" : ""}`}>
+      <div className="assistant-meta"><span className="assistant-avatar"><BrandMark size={18} /></span><strong>Clarity</strong>{message.status === "streaming" && <small>Thinking…</small>}</div>
+      {streamingEmpty
+        ? <div className="typing-indicator" aria-label="Clarity is thinking"><i /><i /><i /></div>
+        : message.content && <ResponseBody text={message.content} />}
+      {message.status === "error" && (
+        <div className="turn-error"><p>{error ?? "Clarity couldn’t finish that response."}</p><button className="secondary-button" type="button" onClick={retry}><RotateCcw size={14} /> Try again</button></div>
+      )}
+      {message.status === "complete" && message.content && <button className="message-copy" type="button" onClick={() => navigator.clipboard.writeText(message.content)}><Copy size={12} /> Copy</button>}
+    </div>
+  );
+}
+
+function ExpandedBody({
+  state,
+  history,
+  dispatch,
+  openConversation,
+  conversationEnd
+}: {
+  state: OverlayState;
+  history: HistoryItem[];
+  dispatch: (action: Record<string, unknown>) => void;
+  openConversation: (id: string) => void;
+  conversationEnd: React.RefObject<HTMLDivElement | null>;
+}) {
   if (state.phase === "expanded-history") {
-    const selected = history.find((item) => item.id === state.selectedHistoryId);
-    if (selected) {
-      return (
-        <section className="expanded-content history-detail" aria-label="Session detail">
-          <button className="back-button" type="button" onClick={() => dispatch({ type: "SHOW_HISTORY" })}><ChevronLeft size={14} /> Sessions</button>
-          <div className="detail-heading"><div><span className="eyebrow">{selected.timestamp}</span><h2>{selected.title}</h2></div><ShieldCheck size={17} /></div>
-          {selected.response ? <ResponseBody text={selected.response} /> : <div className="empty-state"><Clock3 size={23} /><h3>No transcript for this session</h3><p>Clarity did not detect enough conversation to prepare a response.</p></div>}
-        </section>
-      );
-    }
     return (
       <section className="expanded-content history-list" aria-label="Recent sessions">
-        <div className="section-heading"><div><span className="eyebrow">Local history</span><h2>Recent sessions</h2></div><span className="local-badge">On this Mac</span></div>
+        <div className="section-heading"><div><span className="eyebrow">Local history</span><h2>Conversations</h2></div><span className="local-badge">On this Mac</span></div>
         <div className="history-items">
           {history.map((item) => (
-            <button className="history-row" key={item.id} type="button" onClick={() => dispatch({ type: "SELECT_HISTORY", id: item.id })}>
+            <button className="history-row" key={item.id} type="button" onClick={() => openConversation(item.id)}>
               <span className="history-icon"><Clock3 size={15} /></span>
-              <span className="history-text"><strong>{item.title}</strong><small>{item.excerpt}</small></span>
+              <span className="history-text"><strong>{item.title}</strong><small>{item.excerpt || "No messages yet"}</small></span>
+              {typeof item.messageCount === "number" && <span className="message-count">{item.messageCount} {item.messageCount === 1 ? "message" : "messages"}</span>}
               <span className="history-time">{item.timestamp}</span>
               <ChevronLeft className="row-chevron" size={14} />
             </button>
           ))}
+          {!history.length && <div className="empty-state"><Clock3 size={23} /><h3>No conversations yet</h3><p>Your local conversations will appear here after you ask Clarity something.</p></div>}
         </div>
       </section>
     );
@@ -87,7 +109,7 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
         <span className="eyebrow">Local provider</span>
         <h2>Clarity couldn’t finish that response</h2>
         <p>{state.error}</p>
-        <button className="secondary-button" type="button" onClick={() => dispatch({ type: "RETRY" })}><RotateCcw size={14} /> Try again</button>
+        <button className="secondary-button" type="button" onClick={() => dispatch({ type: "CLEAR" })}>Dismiss</button>
       </section>
     );
   }
@@ -119,10 +141,13 @@ function ExpandedBody({ state, history, dispatch }: { state: OverlayState; histo
   }
 
   return (
-    <section className="expanded-content response-state">
-      <div className="response-heading"><div><span className="eyebrow">Clarity</span><h2>A focused answer</h2></div><button className="quiet-action" type="button" onClick={() => navigator.clipboard.writeText(state.response)}><Copy size={13} /> Copy</button></div>
-      <ResponseBody text={state.response} />
-      <div className="response-footer"><span><ShieldCheck size={13} /> Generated on this Mac</span><button type="button" onClick={() => dispatch({ type: "CLEAR" })}>New question</button></div>
+    <section className="expanded-content conversation-state" aria-label="Conversation with Clarity">
+      <div className="conversation-heading"><div><span className="eyebrow">Conversation</span><h2>{state.conversationTitle || "Chat with Clarity"}</h2></div><button className="quiet-action" type="button" onClick={() => dispatch({ type: "CLEAR" })}><MessageSquarePlus size={13} /> New chat</button></div>
+      <div className="chat-thread" role="log" aria-live="polite" aria-relevant="additions text">
+        {state.messages.map((message) => <ConversationTurn key={message.id} message={message} error={state.error} retry={() => dispatch({ type: "RETRY" })} />)}
+        <div ref={conversationEnd} />
+      </div>
+      <div className="response-footer"><span><ShieldCheck size={13} /> Conversation stored on this Mac</span><span>{state.messages.length} {state.messages.length === 1 ? "message" : "messages"}</span></div>
     </section>
   );
 }
@@ -137,6 +162,7 @@ function OverlayApp() {
   const [now, setNow] = useState(Date.now());
   const input = useRef<HTMLInputElement>(null);
   const modeButton = useRef<HTMLButtonElement>(null);
+  const conversationEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     window.clarityOverlay.getState().then(setState);
@@ -157,6 +183,11 @@ function OverlayApp() {
     return () => window.clearInterval(timer);
   }, [state?.startedAt]);
 
+  useEffect(() => {
+    if (state?.phase !== "expanded-response") return;
+    conversationEnd.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [state?.messages, state?.phase]);
+
   const expanded = Boolean(state && isExpanded(state.phase));
   const listening = Boolean(state?.startedAt);
   const duration = useMemo(() => elapsed(state?.startedAt ?? null, now), [state?.startedAt, now]);
@@ -167,7 +198,20 @@ function OverlayApp() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    dispatch({ type: "SUBMIT", prompt: draft });
+    const prompt = draft.trim();
+    if (!prompt || state?.requestId) return;
+    setDraft("");
+    void dispatch({ type: "SUBMIT", prompt });
+  }
+
+  async function showHistory() {
+    setHistory(await window.clarityOverlay.getHistory());
+    await dispatch({ type: "SHOW_HISTORY" });
+  }
+
+  async function openConversation(id: string) {
+    const conversation: Conversation | null = await window.clarityOverlay.getConversation(id);
+    if (conversation) await dispatch({ type: "LOAD_CONVERSATION", conversation });
   }
 
   async function closeModePicker() {
@@ -222,13 +266,13 @@ function OverlayApp() {
             {listening ? <><span className="live-dot" /> Listening <b>{duration}</b></> : <><ShieldCheck size={12} /> Private by default</>}
           </div>
           <div className="chrome-actions">
-            <IconButton label="Recent sessions" active={state.phase === "expanded-history"} onClick={() => dispatch({ type: "SHOW_HISTORY" })}><History size={13} /></IconButton>
+            <IconButton label="Recent conversations" active={state.phase === "expanded-history"} onClick={() => { void showHistory(); }}><History size={13} /></IconButton>
             <IconButton label="Settings" onClick={() => { void window.clarityOverlay.openSettings(); }}><Settings size={13} /></IconButton>
             <IconButton label="Hide overlay" onClick={() => dispatch({ type: "HIDE" })}><X size={13} /></IconButton>
           </div>
         </header>
 
-        {expanded && <ExpandedBody state={state} history={history} dispatch={dispatch} />}
+        {expanded && <ExpandedBody state={state} history={history} dispatch={dispatch} openConversation={(id) => { void openConversation(id); }} conversationEnd={conversationEnd} />}
 
         <form className="command-row" onSubmit={submit}>
           <span className="command-brand"><BrandMark size={25} /></span>
@@ -237,7 +281,7 @@ function OverlayApp() {
             aria-label="Ask Clarity"
             value={draft}
             onChange={(event) => { setDraft(event.target.value); void window.clarityOverlay.dispatch({ type: "SET_PROMPT", prompt: event.target.value }); }}
-            placeholder={listening ? "Ask about this conversation…" : "Ask anything…"}
+            placeholder={state.messages.length ? "Ask a follow-up…" : listening ? "Ask about this conversation…" : "Ask anything…"}
           />
           <button ref={modeButton} className={`mode-pill ${modePicker ? "is-active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={Boolean(modePicker)} aria-label={`Assistant mode: ${modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.label ?? "General"}`} onClick={() => void toggleModePicker()}><Grid2X2 size={12} /><span>{modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.shortLabel ?? "General"}</span><ChevronDown size={10} /></button>
           <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch({ type: listening ? "STOP_LISTENING" : "START_LISTENING" })}>
@@ -246,7 +290,7 @@ function OverlayApp() {
           {expanded
             ? <IconButton label="Collapse" onClick={() => dispatch({ type: "COLLAPSE" })}><ChevronUp size={16} /></IconButton>
             : <IconButton label="Expand" onClick={() => dispatch({ type: "EXPAND" })}><ChevronDown size={16} /></IconButton>}
-          <button className="send-button" type="submit" aria-label="Send" disabled={!draft.trim()}><SendHorizontal size={14} /></button>
+          <button className="send-button" type="submit" aria-label="Send" disabled={!draft.trim() || Boolean(state.requestId)}><SendHorizontal size={14} /></button>
         </form>
       </div>
       {modePicker && modeModel && <ModePicker anchorElement={modeButton.current} model={modeModel} placement={modePicker.placement} viewportHeight={modePicker.viewportHeight} error={modeError} onClose={() => void closeModePicker()} onManage={() => void manageModes()} onSelect={(modeId) => void selectMode(modeId)} />}

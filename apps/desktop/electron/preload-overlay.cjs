@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const allowedActions = new Set([
   "SHOW", "HIDE", "TOGGLE_VISIBILITY", "SET_PROMPT", "SUBMIT", "EXPAND", "COLLAPSE",
-  "START_LISTENING", "STOP_LISTENING", "SHOW_HISTORY", "SELECT_HISTORY", "CLEAR", "RETRY"
+  "START_LISTENING", "STOP_LISTENING", "SHOW_HISTORY", "LOAD_CONVERSATION", "RETRY", "CLEAR"
 ]);
 
 const overlayBridge = {
@@ -12,6 +12,7 @@ const overlayBridge = {
     return ipcRenderer.invoke("overlay:dispatch", action);
   },
   getHistory: () => ipcRenderer.invoke("overlay:get-history"),
+  getConversation: (id) => ipcRenderer.invoke("overlay:get-conversation", id),
   getModeModel: () => ipcRenderer.invoke("overlay:get-mode-model"),
   setMode: (modeId) => ipcRenderer.invoke("overlay:set-mode", modeId),
   openModePicker: (layout) => ipcRenderer.invoke("overlay:open-mode-picker", layout),

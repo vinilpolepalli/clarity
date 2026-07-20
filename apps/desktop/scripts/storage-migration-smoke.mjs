@@ -18,6 +18,7 @@ try {
   legacy.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
     INSERT INTO schema_migrations VALUES (1, datetime('now'));
+    INSERT INTO schema_migrations VALUES (2, datetime('now'));
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '', response TEXT NOT NULL DEFAULT '',
       started_at TEXT NOT NULL, updated_at TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'meeting', status TEXT NOT NULL DEFAULT 'complete'
@@ -27,7 +28,7 @@ try {
   initializeStorageDatabase(legacy);
   initializeStorageDatabase(legacy);
   assert.deepEqual({ ...legacy.prepare("SELECT mode, mode_prompt_version FROM sessions WHERE id = ?").get("legacy") }, { mode: "lecture", mode_prompt_version: 0 });
-  assert.equal(legacy.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version, 2);
+  assert.equal(legacy.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version, 3);
   legacy.close();
 
   console.log("Storage migration smoke passed");
