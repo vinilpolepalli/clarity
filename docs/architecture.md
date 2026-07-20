@@ -32,7 +32,9 @@ The utility-process database uses a versioned migration table, WAL, foreign keys
 
 Provider keys use the macOS `security` command against a dedicated generic-password service. The renderer can save, delete, and check presence but cannot read a stored key.
 
-Provider calls receive the current conversation rather than only the newest prompt. The desktop bounds context to the latest 24 messages and 18,000 characters before sending it, so follow-ups retain useful history without allowing a thread to grow requests indefinitely.
+Model discovery and connection testing also run in the Electron main process. The renderer receives only curated/discovered model metadata and normalized status results; a successful test proves that the saved key, provider endpoint, and selected model can complete one tiny request together.
+
+Inference calls receive the current conversation rather than only the newest prompt. The desktop bounds context to the latest 24 messages and 18,000 characters before sending it, so follow-ups retain useful history without allowing a thread to grow requests indefinitely.
 
 Screen context is a separate, persistent preference that defaults off. For an enabled request, the Electron main process freezes the overlay's current display, temporarily hides the overlay, captures and bounds a PNG in memory, and attaches it only to the newest user turn sent to an explicitly image-capable provider/model pair. The renderer receives metadata and an authorized ephemeral preview, never raw capture authority. Screenshot bytes are owned by the active request, replaced on the next request, cleared on conversation reset or renderer failure, and excluded from SQLite and optional cloud sync. The assistant turn keeps a `Viewed screen` disclosure even if inference fails after transmission.
 

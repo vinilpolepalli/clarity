@@ -13,7 +13,8 @@ This implementation was created from a clean `origin/main` baseline. It does not
 - Split onboarding with explicit Accessibility, Microphone, and Screen/System Audio permission explanations and safe continuation when permissions are denied.
 - General, Models, Audio, Modes, Keybindings, Profile/Cloud, Privacy, Integrations, and About settings. There is no Billing surface.
 - BYOK provider selection with API keys stored only in macOS Keychain, plus a deterministic offline demo provider.
-- Streaming OpenAI-compatible, NVIDIA NIM, and Anthropic provider adapters with cancellation and redacted failures.
+- Ranked NVIDIA NIM presets, live model discovery, saved custom model IDs, and an explicit connection test that verifies the selected key, endpoint, and model with one tiny request.
+- Streaming OpenAI-compatible, NVIDIA NIM, and Anthropic provider adapters with cancellation and normalized, redacted failures.
 - Native Swift microphone and ScreenCaptureKit system-audio helper with a versioned handshake, sequence epochs, structured errors, and bounded desktop buffering.
 - Local `node:sqlite` database isolated in an Electron utility process, with WAL, migrations, ordered conversation messages, FTS5 search, transcripts, artifacts, and exports.
 - A local whisper.cpp CLI adapter, context budgeting, generated-artifact validation, transcript prompt-injection marking, and inference backpressure.
@@ -38,7 +39,7 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 install
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 dev
 ```
 
-Development mode uses the offline deterministic provider and a fresh two-window shell. Ask a question, then keep using the same composer for follow-ups; open Recent conversations to resume a saved thread or choose New chat to start over. Provider keys are entered in Settings → Models and stored in Keychain; do not put them in `.env`.
+Development mode uses the offline deterministic provider and a fresh two-window shell. Ask a question, then keep using the same composer for follow-ups; open Recent conversations to resume a saved thread or choose New chat to start over. Provider keys are entered in Settings → Models and stored in Keychain; do not put them in `.env`. After saving a key, refresh the provider catalog or add a custom model ID, select a model, and use Test connection to verify that exact configuration.
 
 ## Verify
 
@@ -50,7 +51,7 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 build
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 e2e
 ```
 
-The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, screen-context opt-in and restart persistence, ephemeral previews, screen-share protection toggling and restart persistence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
+The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, ranked model selection, custom-model validation, no-key connection gates, screen-context opt-in and restart persistence, ephemeral previews, screen-share protection toggling and restart persistence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
 
 ## Package
 

@@ -1311,6 +1311,153 @@ kbd {
   font-size: 9.5px;
 }
 
+.model-picker-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.model-picker-actions .settings-select {
+  width: min(310px, 34vw);
+  min-width: 220px;
+}
+
+.compact-button {
+  min-height: 29px;
+  font-size: 9.5px;
+}
+
+.custom-model-panel {
+  display: grid;
+  padding: 12px 13px;
+  gap: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.custom-model-panel > div:first-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.custom-model-panel > p {
+  margin: 0;
+  color: #777b82;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.custom-model-panel > p.is-error {
+  color: #d99095;
+}
+
+.custom-model-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.custom-model-list > span {
+  display: inline-flex;
+  max-width: 250px;
+  min-height: 25px;
+  padding: 0 4px 0 8px;
+  gap: 5px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  color: #a7a9ad;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.custom-model-list small {
+  overflow: hidden;
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-model-list button {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #777a80;
+  background: transparent;
+}
+
+.custom-model-list button:hover {
+  color: #dc858a;
+  background: rgba(255, 124, 131, 0.08);
+}
+
+.provider-connection {
+  display: grid;
+  min-height: 70px;
+  padding: 13px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.provider-connection > span {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.provider-connection > span > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #686b70;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.035);
+}
+
+.provider-connection > span > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.provider-connection strong {
+  color: #d4d5d2;
+  font-size: 10.5px;
+  font-weight: 570;
+}
+
+.provider-connection small {
+  overflow: hidden;
+  color: #73767c;
+  font-size: 9px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.provider-connection.is-testing > span > i {
+  background: #e4bd6b;
+  box-shadow: 0 0 0 4px rgba(228, 189, 107, 0.08);
+}
+
+.provider-connection.is-connected > span > i {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(200, 255, 99, 0.08);
+}
+
+.provider-connection.is-error > span > i {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px rgba(255, 124, 131, 0.08);
+}
+
+.provider-connection.is-error small {
+  color: #c67d82;
+}
+
 .meter-demo {
   display: grid;
   padding: 14px;

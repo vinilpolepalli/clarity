@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInitialOverlayState, demoResponse, mergePreferences, reduceOverlay } from "./index.mjs";
+import { createInitialOverlayState, DEFAULT_PROVIDER_MODELS, demoResponse, mergePreferences, reduceOverlay } from "./index.mjs";
 
 describe("overlay reducer", () => {
   it("round-trips visibility through the last visible phase", () => {
@@ -102,8 +102,23 @@ describe("portable contracts", () => {
     expect(preferences.keybindings.toggleOverlay).toContain("Shift");
     expect(preferences.screenContextEnabled).toBe(false);
     expect(preferences.imageInputOverrides).toEqual({});
-    expect(preferences.providerModels.nvidia).toBe("meta/llama-3.2-11b-vision-instruct");
-    expect(mergePreferences({ provider: "nvidia", model: "custom/nvidia-vision" }).providerModels.nvidia).toBe("custom/nvidia-vision");
+    expect(preferences.customModels.nvidia).toEqual([]);
+    expect(DEFAULT_PROVIDER_MODELS.nvidia).toBe("deepseek-ai/deepseek-v4-flash");
+  });
+
+  it("normalizes saved custom provider models", () => {
+    const preferences = mergePreferences({ customModels: { nvidia: [" custom/model ", "custom/model", ""] } });
+    expect(preferences.customModels.nvidia).toEqual(["custom/model"]);
+    expect(preferences.customModels.openai).toEqual([]);
+  });
+
+  it("bounds saved custom models and ignores malformed provider collections", () => {
+    const models = Array.from({ length: 25 }, (_, index) => `custom/model-${index}`);
+    models[3] = "x".repeat(161);
+    const preferences = mergePreferences({ customModels: { nvidia: models, openai: "not-an-array" } });
+    expect(preferences.customModels.nvidia).toHaveLength(20);
+    expect(preferences.customModels.nvidia).not.toContain("x".repeat(161));
+    expect(preferences.customModels.openai).toEqual([]);
   });
 
   it("provides a deterministic offline response", () => {

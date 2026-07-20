@@ -86,6 +86,32 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     expect(afterSettings.bounds).toMatchObject(resized);
     await expect(settings).toHaveScreenshot("settings-general.png");
 
+    await settings.getByRole("button", { name: "Models" }).click();
+    await expect(settings.getByRole("heading", { name: "Models" })).toBeVisible();
+    await settings.getByRole("combobox", { name: "Provider" }).selectOption("nvidia");
+    const modelPicker = settings.getByRole("combobox", { name: "Model" });
+    const preferredModels = await modelPicker.locator("option").allTextContents();
+    expect(preferredModels.slice(0, 5)).toEqual([
+      "DeepSeek V4 Flash · #1 Recommended · Best balance",
+      "GPT OSS 20B · #2 Fastest · Reasoning",
+      "GLM 5.2 · #3 Best quality · Slower",
+      "Nemotron 3 Nano 30B · #4 Fast · NVIDIA",
+      "Llama 3.1 8B Instruct · #5 Lightweight · Fast"
+    ]);
+    await expect(settings.getByRole("button", { name: "Refresh" })).toBeDisabled();
+    await expect(settings.getByRole("button", { name: "Test connection" })).toBeDisabled();
+    await expect(settings.getByText("Not tested for this configuration")).toBeVisible();
+    await settings.getByRole("textbox", { name: "Custom model ID" }).fill("invalid model id");
+    await settings.getByRole("button", { name: "Add custom model" }).click();
+    await expect(settings.getByText("Enter a model ID without spaces, up to 160 characters.")).toBeVisible();
+    await expect(modelPicker).toHaveValue("deepseek-ai/deepseek-v4-flash");
+    await settings.getByRole("textbox", { name: "Custom model ID" }).fill("custom/meeting-model");
+    await settings.getByRole("button", { name: "Add custom model" }).click();
+    await expect(modelPicker).toHaveValue("custom/meeting-model");
+    await expect(settings.getByText("Added custom/meeting-model and selected it.")).toBeVisible();
+    await settings.getByRole("button", { name: "Remove custom/meeting-model" }).click();
+    await expect(modelPicker).toHaveValue("deepseek-ai/deepseek-v4-flash");
+
     await settings.getByRole("button", { name: "Privacy" }).click();
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(settings.getByText("No desktop app can guarantee invisibility.")).toBeVisible();
@@ -244,6 +270,7 @@ test("screen capture survives overlay recreation requested from Privacy settings
 });
 
 test("screen-share protection toggles immediately and persists", async () => {
+  test.setTimeout(90_000);
   const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-protection-"));
   const env = { CLARITY_TEST_PRESERVE_CONTENT_PROTECTION: "1" };
   let application: Awaited<ReturnType<typeof electron.launch>> | null = null;

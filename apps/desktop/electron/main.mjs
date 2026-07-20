@@ -16,6 +16,7 @@ import {
 } from "electron";
 import {
   createInitialOverlayState,
+  DEFAULT_PROVIDER_MODELS,
   DEMO_HISTORY,
   demoResponse,
   isExpandedPhase,
@@ -27,7 +28,17 @@ import {
   defaultCompactBounds,
   transitionBounds
 } from "@clarity/windowing";
-import { imageInputCapability, providerDefinition, providerEndpointIdentity, streamProviderResponse } from "@clarity/providers";
+import {
+  curatedModels,
+  imageInputCapability,
+  listModels,
+  providerDefinition,
+  providerEndpointIdentity,
+  ProviderError,
+  serializeProviderError,
+  streamProviderResponse,
+  testConnection
+} from "@clarity/providers";
 import { NativeCaptureClient, RollingAudioBuffer } from "@clarity/capture-client";
 import { PreferenceStore } from "./persistence.mjs";
 import { deleteProviderKey, hasProviderKey, readProviderKey, saveProviderKey } from "./keychain.mjs";
@@ -58,6 +69,8 @@ let store;
 let boundsWriteTimer = null;
 let programmaticBounds = false;
 let keyConfigured = { openai: false, anthropic: false, nvidia: false };
+let connectionRevision = 0;
+let providerConnection = untestedProviderConnection();
 let activeInference = null;
 let activeSubmission = null;
 let storage = null;
@@ -65,6 +78,22 @@ let capture = null;
 let screenContext = null;
 let pendingOverlayRecreation = false;
 const recentAudio = new RollingAudioBuffer();
+
+function untestedProviderConnection() {
+  return { state: "untested", provider: null, model: null, testedAt: null, latencyMs: null, error: null };
+}
+
+function invalidateProviderConnection() {
+  connectionRevision += 1;
+  providerConnection = untestedProviderConnection();
+}
+
+async function selectedProviderKey(provider) {
+  if (!keyConfigured[provider]) {
+    throw new ProviderError("Save this provider's API key before testing the connection.", { code: "key_missing", provider });
+  }
+  return readProviderKey(provider);
+}
 
 function applyOverlayContentProtection() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return false;
@@ -500,13 +529,20 @@ function permissionStatus() {
 }
 
 function getSettingsModel() {
+  const provider = preferences.provider;
+  const providerCatalog = provider === "demo"
+    ? { curated: [{ id: "clarity-demo", label: "Clarity Demo", description: "Offline", source: "curated" }], discoverySupported: false }
+    : { curated: curatedModels(provider), discoverySupported: provider === "nvidia" || provider === "openai" };
   return {
     preferences: structuredClone(preferences),
     permissions: permissionStatus(),
     app: { version: app.getVersion(), packaged: app.isPackaged, demo: isDemo },
     onboarding: !preferences.onboardingComplete,
     keyConfigured: structuredClone(keyConfigured),
-    imageInput: currentImageInput()
+    defaultProviderModels: structuredClone(DEFAULT_PROVIDER_MODELS),
+    imageInput: currentImageInput(),
+    providerCatalog,
+    providerConnection: structuredClone(providerConnection)
   };
 }
 
@@ -570,10 +606,13 @@ function registerIpc() {
       "launchAtLogin", "launchOverlayAtLogin", "reduceMotion", "reduceTransparency",
       "protectOverlayContent", "transcriptLanguage", "outputLanguage", "microphoneId",
       "captureSystemAudio", "provider", "model", "mode", "selectedSettingsTab",
-      "cloudEnabled", "integrations", "keybindings", "screenContextEnabled", "imageInputOverrides", "providerModels"
+      "cloudEnabled", "integrations", "keybindings", "screenContextEnabled", "imageInputOverrides", "customModels"
     ];
     const safePatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => allowed.includes(key)));
+    const connectionChanged = (Object.hasOwn(safePatch, "provider") && safePatch.provider !== preferences.provider)
+      || (Object.hasOwn(safePatch, "model") && safePatch.model !== preferences.model);
     preferences = await store.update(safePatch);
+    if (connectionChanged) invalidateProviderConnection();
     if (Object.hasOwn(safePatch, "launchAtLogin") && app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: Boolean(preferences.launchAtLogin), openAsHidden: true });
     }
@@ -611,12 +650,45 @@ function registerIpc() {
   ipcMain.handle("settings:save-provider-key", async (_event, payload) => {
     await saveProviderKey(payload?.provider, payload?.key);
     keyConfigured[payload.provider] = true;
+    invalidateProviderConnection();
     sendSettingsModel();
     return getSettingsModel();
   });
   ipcMain.handle("settings:delete-provider-key", async (_event, provider) => {
     await deleteProviderKey(provider);
     keyConfigured[provider] = false;
+    invalidateProviderConnection();
+    sendSettingsModel();
+    return getSettingsModel();
+  });
+  ipcMain.handle("settings:list-provider-models", async () => {
+    const provider = preferences.provider;
+    if (provider === "demo") return { ok: true, models: [] };
+    try {
+      const key = await selectedProviderKey(provider);
+      return { ok: true, models: await listModels({ provider, key }) };
+    } catch (error) {
+      return { ok: false, models: [], error: serializeProviderError(error, provider) };
+    }
+  });
+  ipcMain.handle("settings:test-provider-connection", async () => {
+    const provider = preferences.provider;
+    const model = preferences.model;
+    if (provider === "demo") return getSettingsModel();
+    const revision = ++connectionRevision;
+    providerConnection = { state: "testing", provider, model, testedAt: null, latencyMs: null, error: null };
+    sendSettingsModel();
+    try {
+      const key = await selectedProviderKey(provider);
+      const result = await testConnection({ provider, model, key });
+      if (revision === connectionRevision && provider === preferences.provider && model === preferences.model) {
+        providerConnection = { state: "connected", provider, model, testedAt: result.testedAt, latencyMs: result.latencyMs, error: null };
+      }
+    } catch (error) {
+      if (revision === connectionRevision) {
+        providerConnection = { state: "error", provider, model, testedAt: new Date().toISOString(), latencyMs: null, error: serializeProviderError(error, provider) };
+      }
+    }
     sendSettingsModel();
     return getSettingsModel();
   });
@@ -685,7 +757,9 @@ async function boot() {
     });
     try { await capture.connect(); } catch (error) { console.warn("Native capture is unavailable:", error.message); capture = null; }
   }
-  keyConfigured = Object.fromEntries(await Promise.all(["openai", "anthropic", "nvidia"].map(async (provider) => [provider, await hasProviderKey(provider)])));
+  keyConfigured = isTest
+    ? { openai: false, anthropic: false, nvidia: false }
+    : Object.fromEntries(await Promise.all(["openai", "anthropic", "nvidia"].map(async (provider) => [provider, await hasProviderKey(provider)])));
   if (isDemo || (isTest && !testOnboarding)) {
     const testOverrides = isTest && !preserveTestContentProtection ? { protectOverlayContent: false } : {};
     preferences = await store.update({ onboardingComplete: true, reduceMotion: isTest, ...testOverrides });

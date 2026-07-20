@@ -12,7 +12,7 @@ export const OVERLAY_PHASES = Object.freeze([
 
 export const DEFAULT_PROVIDER_MODELS = Object.freeze({
   demo: "clarity-demo",
-  nvidia: "meta/llama-3.2-11b-vision-instruct",
+  nvidia: "deepseek-ai/deepseek-v4-flash",
   openai: "gpt-4.1-mini",
   anthropic: "claude-sonnet-5"
 });
@@ -32,8 +32,8 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   screenContextEnabled: false,
   provider: "demo",
   model: "clarity-demo",
-  providerModels: DEFAULT_PROVIDER_MODELS,
   imageInputOverrides: {},
+  customModels: { nvidia: [], openai: [], anthropic: [] },
   mode: "meeting",
   selectedSettingsTab: "general",
   cloudEnabled: false,
@@ -125,17 +125,21 @@ export function mergePreferences(value) {
   const keybindings = candidate.keybindings && typeof candidate.keybindings === "object" ? candidate.keybindings : {};
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
   const imageInputOverrides = candidate.imageInputOverrides && typeof candidate.imageInputOverrides === "object" ? candidate.imageInputOverrides : {};
-  const candidateProviderModels = candidate.providerModels && typeof candidate.providerModels === "object" ? candidate.providerModels : {};
-  const providerModels = { ...DEFAULT_PREFERENCES.providerModels, ...candidateProviderModels };
-  if (candidate.provider && candidate.model && !Object.hasOwn(candidateProviderModels, candidate.provider)) providerModels[candidate.provider] = candidate.model;
+  const customModels = candidate.customModels && typeof candidate.customModels === "object" ? candidate.customModels : {};
   return {
     ...DEFAULT_PREFERENCES,
     ...candidate,
     version: 1,
     keybindings: { ...DEFAULT_PREFERENCES.keybindings, ...keybindings },
     integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations },
-    providerModels,
-    imageInputOverrides: { ...imageInputOverrides }
+    imageInputOverrides: { ...imageInputOverrides },
+    customModels: Object.fromEntries(Object.keys(DEFAULT_PREFERENCES.customModels).map((provider) => {
+      const values = Array.isArray(customModels[provider]) ? customModels[provider] : [];
+      const normalized = [...new Set(values.map((value) => String(value).trim()).filter(Boolean))]
+        .filter((value) => value.length <= 160)
+        .slice(0, 20);
+      return [provider, normalized];
+    }))
   };
 }
 
