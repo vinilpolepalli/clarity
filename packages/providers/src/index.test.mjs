@@ -127,6 +127,7 @@ describe("provider capabilities", () => {
   });
 
   it.each([
+    [403, "permission_denied", false],
     [404, "model_unavailable", false],
     [429, "rate_limited", true],
     [503, "provider_unavailable", true],
@@ -155,6 +156,10 @@ describe("provider capabilities", () => {
     await expect(testConnection({ provider: "nvidia", model: "a/model", key: "secret", fetchImpl: invalidJson })).rejects.toMatchObject({ code: "invalid_response" });
     const unexpected = vi.fn(async () => new Response(JSON.stringify({ result: "OK" }), { status: 200 }));
     await expect(testConnection({ provider: "nvidia", model: "a/model", key: "secret", fetchImpl: unexpected })).rejects.toMatchObject({ code: "invalid_response" });
+    const emptyChoices = vi.fn(async () => new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    await expect(testConnection({ provider: "nvidia", model: "a/model", key: "secret", fetchImpl: emptyChoices })).rejects.toMatchObject({ code: "invalid_response" });
+    const emptyContent = vi.fn(async () => new Response(JSON.stringify({ content: [] }), { status: 200 }));
+    await expect(testConnection({ provider: "anthropic", model: "claude", key: "secret", fetchImpl: emptyContent })).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it("normalizes streaming HTTP failures and empty response bodies", async () => {

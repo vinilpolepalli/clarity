@@ -131,8 +131,11 @@ function responseDetail(text) {
 function errorFromResponse(provider, status, detail) {
   const definition = providerDefinition(provider);
   const normalizedDetail = responseDetail(detail);
-  if (status === 401 || status === 403) {
+  if (status === 401) {
     return new ProviderError(`${definition.label} rejected this API key. Save a valid key and try again.`, { code: "invalid_key", provider, status });
+  }
+  if (status === 403) {
+    return new ProviderError(`${definition.label} does not allow this key to use the selected model. Check account access or choose another model.`, { code: "permission_denied", provider, status });
   }
   if (status === 404 || /model.+(?:not found|does not exist|unavailable)/i.test(normalizedDetail)) {
     return new ProviderError("The selected model is unavailable. Refresh models or choose another model.", { code: "model_unavailable", provider, status });
@@ -231,7 +234,9 @@ export async function testConnection({ provider, model, key, signal, fetchImpl =
     let payload;
     try { payload = await response.json(); }
     catch (error) { throw new ProviderError(`${definition.label} returned an invalid test response.`, { code: "invalid_response", provider, cause: error }); }
-    const valid = provider === "anthropic" ? Array.isArray(payload?.content) : Array.isArray(payload?.choices);
+    const valid = provider === "anthropic"
+      ? Array.isArray(payload?.content) && payload.content.length > 0
+      : Array.isArray(payload?.choices) && payload.choices.length > 0;
     if (!valid) throw new ProviderError(`${definition.label} returned an unexpected test response.`, { code: "invalid_response", provider });
     return {
       ok: true,
