@@ -43,6 +43,7 @@ const APP_ROOT = join(import.meta.dirname, "..");
 const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo");
 const isTest = process.env.CLARITY_TEST === "1";
 const testOnboarding = process.env.CLARITY_TEST_ONBOARDING === "1";
+const preserveTestContentProtection = process.env.CLARITY_TEST_PRESERVE_CONTENT_PROTECTION === "1";
 const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
 
 app.setName("Clarity");
@@ -81,6 +82,13 @@ async function selectedProviderKey(provider) {
     throw new ProviderError("Save this provider's API key before testing the connection.", { code: "key_missing", provider });
   }
   return readProviderKey(provider);
+}
+
+function applyOverlayContentProtection() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  const requested = Boolean(preferences.protectOverlayContent);
+  overlayWindow.setContentProtection(requested);
+  return overlayWindow.isContentProtected();
 }
 
 async function persistConversationMessage(conversationId, message, sequence) {
@@ -217,7 +225,7 @@ function applyOverlayPresentation(previousPhase, animate = true) {
     overlayWindow.setMinimumSize(compact.width, COMPACT_HEIGHT);
     overlayWindow.setMaximumSize(compact.width, COMPACT_HEIGHT);
   }
-  overlayWindow.setContentProtection(Boolean(preferences.protectOverlayContent));
+  applyOverlayContentProtection();
   if (!overlayWindow.isVisible()) overlayWindow.showInactive();
 }
 
@@ -264,17 +272,18 @@ function queueBoundsWrite() {
   }, 180);
 }
 
-function createOverlayWindow() {
+function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
   const workArea = screen.getPrimaryDisplay().workArea;
-  const initial = preferences.overlayCompactBounds ?? defaultCompactBounds(workArea);
+  const initial = initialBounds ?? preferences.overlayCompactBounds ?? defaultCompactBounds(workArea);
+  const bounds = initialBounds ?? transitionBounds(initial, displayForBounds(initial), false, rememberedGeometry());
   overlayWindow = new BrowserWindow({
-    ...transitionBounds(initial, displayForBounds(initial), false, rememberedGeometry()),
+    ...bounds,
     title: "Clarity Overlay",
     frame: false,
     transparent: !preferences.reduceTransparency,
     backgroundColor: preferences.reduceTransparency ? "#111113" : "#00000000",
     show: false,
-    resizable: false,
+    resizable: Boolean(initialBounds && isExpandedPhase(overlayState.phase)),
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
@@ -293,7 +302,11 @@ function createOverlayWindow() {
   });
   overlayWindow.setAlwaysOnTop(true, "screen-saver", 1);
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  overlayWindow.setContentProtection(Boolean(preferences.protectOverlayContent));
+  if (initialBounds && isExpandedPhase(overlayState.phase)) {
+    overlayWindow.setMinimumSize(420, 300);
+    overlayWindow.setMaximumSize(760, displayForBounds(initialBounds).height);
+  }
+  applyOverlayContentProtection();
   overlayWindow.on("move", queueBoundsWrite);
   overlayWindow.on("resize", queueBoundsWrite);
   overlayWindow.on("close", (event) => {
@@ -304,6 +317,23 @@ function createOverlayWindow() {
   });
   overlayWindow.loadURL(rendererTarget("overlay"));
   overlayWindow.webContents.once("did-finish-load", () => sendOverlayState());
+  if (showWhenReady) {
+    const restoredWindow = overlayWindow;
+    restoredWindow.once("ready-to-show", () => {
+      if (!restoredWindow.isDestroyed() && overlayState.phase !== "hidden") restoredWindow.showInactive();
+    });
+  }
+}
+
+function recreateOverlayWindowForContentProtection() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  const previousWindow = overlayWindow;
+  const initialBounds = previousWindow.getBounds();
+  const showWhenReady = previousWindow.isVisible() && overlayState.phase !== "hidden";
+  previousWindow.removeAllListeners("close");
+  previousWindow.destroy();
+  if (overlayWindow === previousWindow) overlayWindow = null;
+  createOverlayWindow({ initialBounds, showWhenReady });
 }
 
 function createSettingsWindow({ onboarding = false } = {}) {
@@ -410,7 +440,13 @@ function registerIpc() {
     }
     nativeTheme.themeSource = "dark";
     if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.setContentProtection(Boolean(preferences.protectOverlayContent));
+      const requested = Boolean(preferences.protectOverlayContent);
+      const applied = applyOverlayContentProtection();
+      if (Object.hasOwn(safePatch, "protectOverlayContent") && applied !== requested) {
+        // Some macOS releases keep NSWindowSharingNone sticky on an existing window.
+        // Rebuilding only the overlay applies the requested state without losing UI state or geometry.
+        recreateOverlayWindowForContentProtection();
+      }
     }
     sendSettingsModel();
     return getSettingsModel();
@@ -481,7 +517,13 @@ function registerIpc() {
     return true;
   });
   if (isTest) {
-    ipcMain.handle("test:snapshot", () => ({ overlay: structuredClone(overlayState), bounds: overlayWindow?.getBounds(), settings: getSettingsModel() }));
+    ipcMain.handle("test:snapshot", () => ({
+      overlay: structuredClone(overlayState),
+      bounds: overlayWindow?.getBounds(),
+      settings: getSettingsModel(),
+      contentProtected: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isContentProtected()),
+      resizable: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isResizable())
+    }));
     ipcMain.handle("test:set-bounds", (_event, bounds) => {
       const current = overlayWindow.getBounds();
       overlayWindow.setBounds({ ...current, ...bounds }, false);
@@ -535,7 +577,10 @@ async function boot() {
   keyConfigured = isTest
     ? { openai: false, anthropic: false, nvidia: false }
     : Object.fromEntries(await Promise.all(["openai", "anthropic", "nvidia"].map(async (provider) => [provider, await hasProviderKey(provider)])));
-  if (isDemo || (isTest && !testOnboarding)) preferences = await store.update({ onboardingComplete: true, reduceMotion: isTest, protectOverlayContent: !isTest });
+  if (isDemo || (isTest && !testOnboarding)) {
+    const testOverrides = isTest && !preserveTestContentProtection ? { protectOverlayContent: false } : {};
+    preferences = await store.update({ onboardingComplete: true, reduceMotion: isTest, ...testOverrides });
+  }
   if (isTest && testOnboarding) preferences = await store.update({ onboardingComplete: false, reduceMotion: true, protectOverlayContent: false });
   const showOverlayAtBoot = Boolean(preferences.onboardingComplete && (preferences.launchOverlayAtLogin || isDemo || isTest));
   overlayState = createInitialOverlayState(showOverlayAtBoot);
