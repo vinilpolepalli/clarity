@@ -100,6 +100,11 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     ]);
     await expect(settings.getByRole("button", { name: "Refresh" })).toBeDisabled();
     await expect(settings.getByRole("button", { name: "Test connection" })).toBeDisabled();
+    await expect(settings.getByText("Not tested for this configuration")).toBeVisible();
+    await settings.getByRole("textbox", { name: "Custom model ID" }).fill("invalid model id");
+    await settings.getByRole("button", { name: "Add custom model" }).click();
+    await expect(settings.getByText("Enter a model ID without spaces, up to 160 characters.")).toBeVisible();
+    await expect(modelPicker).toHaveValue("deepseek-ai/deepseek-v4-flash");
     await settings.getByRole("textbox", { name: "Custom model ID" }).fill("custom/meeting-model");
     await settings.getByRole("button", { name: "Add custom model" }).click();
     await expect(modelPicker).toHaveValue("custom/meeting-model");
