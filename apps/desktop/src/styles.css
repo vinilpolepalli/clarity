@@ -856,11 +856,6 @@ select:focus-visible {
   width: 100%;
   padding: 34px max(58px, calc((100% - 720px) / 2)) 22px;
   overflow-y: auto;
-  animation: page-in 160ms ease-out;
-}
-
-@keyframes page-in {
-  from { opacity: 0; transform: translateY(3px); }
 }
 
 .page-title {
