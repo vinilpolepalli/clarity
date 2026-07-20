@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Accessibility,
@@ -183,6 +183,7 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   const [discoveredModels, setDiscoveredModels] = useState<ProviderModel[]>([]);
   const [discoveryState, setDiscoveryState] = useState<"idle" | "loading" | "error">("idle");
   const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const discoveryRevision = useRef(0);
   const provider = preferences.provider;
   const needsKey = provider !== "demo";
   const hostedProvider = provider as keyof Preferences["customModels"];
@@ -198,6 +199,7 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   }, [discoveredModels, model.providerCatalog.curated, preferences.model, savedCustomModels]);
 
   useEffect(() => {
+    discoveryRevision.current += 1;
     setDiscoveredModels([]);
     setDiscoveryState("idle");
     setDiscoveryMessage("");
@@ -212,9 +214,11 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   }
 
   async function refreshModels() {
+    const revision = ++discoveryRevision.current;
     setDiscoveryState("loading");
     setDiscoveryMessage("");
     const result = await window.claritySettings.listProviderModels();
+    if (revision !== discoveryRevision.current) return;
     if (result.ok) {
       setDiscoveredModels(result.models);
       setDiscoveryState("idle");
