@@ -66,6 +66,8 @@ Clarity’s provider keys, audio capture, local transcription, inference calls, 
 
 ScreenCaptureKit permission is used for system audio. Screen pixels are not stored by default. `setContentProtection` reduces exposure in many common capture paths but cannot protect against every app, OS change, external camera, or capture technique.
 
+The overlay protection switch is enabled by default and can be turned off when the user intentionally wants to share Clarity. See [Content protection compatibility](docs/content-protection.md) for the exact support boundary and qualification matrix.
+
 ## Repository map
 
 - `apps/desktop/electron` — main process, two BrowserWindows, preloads, Keychain, and storage utility.
