@@ -39,6 +39,7 @@ export const DEMO_HISTORY = Object.freeze([
   {
     id: "demo-decision",
     title: "Launch readiness review",
+    prompt: "Summarize the launch readiness review.",
     timestamp: "Today, 10:42 AM",
     excerpt: "Decisions, owners, and the remaining release gate.",
     response: "The team agreed to keep provider keys on this Mac, finish the overlay parity gate before visual differentiation, and make the unsigned package smoke test the release blocker.\n\n• Owner: Desktop shell — today\n• Owner: Native capture — tomorrow\n• Decision: Optional cloud stays off by default"
@@ -46,6 +47,7 @@ export const DEMO_HISTORY = Object.freeze([
   {
     id: "demo-empty",
     title: "Untitled session",
+    prompt: "",
     timestamp: "Yesterday, 4:18 PM",
     excerpt: "No conversation was detected.",
     response: ""
@@ -53,6 +55,7 @@ export const DEMO_HISTORY = Object.freeze([
   {
     id: "demo-lecture",
     title: "Geometry lecture notes",
+    prompt: "Explain the key geometry proof strategy.",
     timestamp: "Monday, 2:05 PM",
     excerpt: "Inscribed angles and proof strategy.",
     response: "An inscribed angle equals half the measure of its intercepted arc. Start by identifying the center, draw radii to create isosceles triangles, and use the triangle angle sum to connect the central and inscribed angles."

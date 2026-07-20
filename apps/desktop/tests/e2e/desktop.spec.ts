@@ -28,7 +28,8 @@ async function pageByTitle(application: Awaited<ReturnType<typeof electron.launc
 }
 
 test("overlay preserves its anchor, reflows, and keeps settings separate", async () => {
-  const { application, userData } = await launch();
+  test.setTimeout(60_000);
+  const { application, userData } = await launch({ CLARITY_TEST_INFERENCE_DELAY: "1500" });
   try {
     const overlay = await pageByTitle(application, "Clarity Overlay");
     await expect(overlay.locator("[data-phase='compact-idle']")).toBeVisible();
@@ -69,6 +70,15 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     await expect(overlay.locator(".user-bubble")).toHaveCount(2);
     await expect(overlay.getByText("Can you build on that?", { exact: true })).toBeVisible();
 
+    await overlay.getByRole("button", { name: "New chat" }).click();
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Keep working while I reset");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect(overlay.getByLabel("Clarity is thinking")).toBeVisible();
+    await overlay.getByRole("button", { name: "New chat" }).click();
+    await expect(overlay.locator("[data-phase='expanded-empty']")).toBeVisible();
+    await overlay.waitForTimeout(1_800);
+    await expect(overlay.locator(".chat-turn")).toHaveCount(0);
+
     await overlay.getByRole("button", { name: "Settings" }).click();
     const settings = await pageByTitle(application, "Clarity");
     await expect(settings.getByRole("heading", { name: "General" })).toBeVisible();
@@ -85,6 +95,31 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     const collapsed = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
     expect(collapsed.bounds.width).toBe(430);
     expect(collapsed.bounds.height).toBe(88);
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
+test("demo history materializes into a conversation that accepts follow-ups", async () => {
+  test.setTimeout(60_000);
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("button", { name: "Expand" }).click();
+    await overlay.getByRole("button", { name: "Recent conversations" }).click();
+    await overlay.locator(".history-row").filter({ hasText: "Launch readiness review" }).click();
+    await expect(overlay.getByText("The team agreed to keep provider keys on this Mac")).toBeVisible();
+
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What should happen next?");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect(overlay.getByText("Finish the smallest testable slice first")).toBeVisible();
+
+    await overlay.getByRole("button", { name: "Recent conversations" }).click();
+    await expect(overlay.locator(".history-row")).toHaveCount(1);
+    await expect(overlay.locator(".message-count")).toHaveText("4 messages");
+    await overlay.locator(".history-row").click();
+    await expect(overlay.locator(".user-bubble")).toHaveCount(2);
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });

@@ -46,6 +46,17 @@ describe("provider adapters", () => {
     ]);
   });
 
+  it("truncates an oversized newest user message to the character budget", () => {
+    expect(boundedConversationMessages([{ role: "user", content: "abcdefghij" }], { maxMessages: 24, maxCharacters: 6 })).toEqual([
+      { role: "user", content: "abcdef" }
+    ]);
+  });
+
+  it("rejects histories that contain no usable user turn", () => {
+    expect(boundedConversationMessages([{ role: "assistant", content: "orphaned" }])).toEqual([]);
+    expect(() => buildProviderRequest({ provider: "openai", model: "model", messages: [{ role: "assistant", content: "orphaned" }], key: "key" })).toThrow("at least one user message");
+  });
+
   it("parses OpenAI-compatible and Anthropic tokens", () => {
     expect(parseServerSentEvent("openai", 'data: {"choices":[{"delta":{"content":"Hi"}}]}').text).toBe("Hi");
     expect(parseServerSentEvent("anthropic", 'data: {"type":"content_block_delta","delta":{"text":"There"}}').text).toBe("There");

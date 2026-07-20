@@ -36,6 +36,7 @@ const APP_ROOT = join(import.meta.dirname, "..");
 const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo");
 const isTest = process.env.CLARITY_TEST === "1";
 const testOnboarding = process.env.CLARITY_TEST_ONBOARDING === "1";
+const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
 
 app.setName("Clarity");
 if (isTest && process.env.CLARITY_TEST_USER_DATA) app.setPath("userData", process.env.CLARITY_TEST_USER_DATA);
@@ -104,7 +105,10 @@ async function runConversationInference({ requestId, createConversation, persist
 
     let response;
     if (preferences.provider === "demo") {
-      await delay(preferences.reduceMotion ? 80 : 680, inference.signal);
+      const milliseconds = Number.isFinite(testInferenceDelay) && testInferenceDelay >= 0
+        ? testInferenceDelay
+        : preferences.reduceMotion ? 80 : 680;
+      await delay(milliseconds, inference.signal);
       response = demoResponse(userMessage?.content ?? snapshot.lastPrompt);
     } else {
       const key = await readProviderKey(preferences.provider);
@@ -342,11 +346,18 @@ function registerIpc() {
     if (local) return local;
     const demo = DEMO_HISTORY.find((item) => item.id === id);
     if (!demo) return null;
-    return {
+    const createdAt = new Date().toISOString();
+    const messages = [
+      demo.prompt ? { id: `${demo.id}-user`, role: "user", content: demo.prompt, status: "complete", createdAt } : null,
+      demo.response ? { id: `${demo.id}-assistant`, role: "assistant", content: demo.response, status: "complete", createdAt } : null
+    ].filter(Boolean);
+    const conversation = {
       id: demo.id,
       title: demo.title,
-      messages: demo.response ? [{ id: `${demo.id}-assistant`, role: "assistant", content: demo.response, status: "complete", createdAt: new Date().toISOString() }] : []
+      messages
     };
+    if (!storage) return conversation;
+    return storage.call("ensureConversation", { ...conversation, mode: preferences.mode });
   });
   ipcMain.handle("overlay:open-settings", () => { createSettingsWindow(); return true; });
 

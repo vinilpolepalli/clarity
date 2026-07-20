@@ -65,7 +65,9 @@ const statements = {
   `),
   get: database.prepare("SELECT * FROM sessions WHERE id = ?"),
   insert: database.prepare("INSERT INTO sessions(id, title, prompt, response, started_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  insertIfMissing: database.prepare("INSERT OR IGNORE INTO sessions(id, title, prompt, response, started_at, updated_at, mode, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
   insertMessage: database.prepare("INSERT INTO conversation_messages(id, session_id, sequence, role, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  insertMessageIfMissing: database.prepare("INSERT OR IGNORE INTO conversation_messages(id, session_id, sequence, role, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   listMessages: database.prepare("SELECT id, role, content, status, created_at AS createdAt FROM conversation_messages WHERE session_id = ? ORDER BY sequence"),
   touchSession: database.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?"),
   searchIndex: database.prepare("INSERT INTO session_search(session_id, title, prompt, response) VALUES (?, ?, ?, ?)"),
@@ -114,6 +116,29 @@ function handle(method, params) {
       statements.insert.run(params.id, params.title, "", "", now, now, params.mode ?? "meeting", params.status ?? "active");
       statements.searchIndex.run(params.id, params.title, "", "");
       return conversation(params.id);
+    }
+    case "ensureConversation": {
+      const now = params.timestamp ?? new Date().toISOString();
+      const messages = Array.isArray(params.messages) ? params.messages : [];
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        statements.insertIfMissing.run(params.id, params.title, "", "", now, now, params.mode ?? "meeting", params.status ?? "active");
+        for (const [sequence, message] of messages.entries()) {
+          if (message?.role !== "user" && message?.role !== "assistant") continue;
+          statements.insertMessageIfMissing.run(
+            message.id,
+            params.id,
+            sequence,
+            message.role,
+            String(message.content ?? ""),
+            message.status ?? "complete",
+            message.createdAt ?? now
+          );
+        }
+        rebuildSearchIndex(params.id);
+        database.exec("COMMIT");
+        return conversation(params.id);
+      } catch (error) { database.exec("ROLLBACK"); throw error; }
     }
     case "appendMessage": {
       const now = params.createdAt ?? new Date().toISOString();

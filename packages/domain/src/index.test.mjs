@@ -17,6 +17,12 @@ describe("overlay reducer", () => {
     expect(state.response).toBe("");
   });
 
+  it("ignores duplicate submits and stale stream updates while a request is active", () => {
+    const active = reduceOverlay(createInitialOverlayState(true), { type: "SUBMIT", prompt: "hello", requestId: "current" });
+    expect(reduceOverlay(active, { type: "SUBMIT", prompt: "duplicate", requestId: "new" })).toBe(active);
+    expect(reduceOverlay(active, { type: "STREAM", requestId: "old", response: "wrong" })).toBe(active);
+  });
+
   it("keeps follow-up turns in one conversation", () => {
     let state = reduceOverlay(createInitialOverlayState(true), {
       type: "SUBMIT", prompt: "hello", requestId: "one", conversationId: "thread", userMessageId: "u1", assistantMessageId: "a1"
@@ -49,6 +55,23 @@ describe("overlay reducer", () => {
     state = reduceOverlay(state, { type: "RESOLVE", requestId: "one", response: "Hi" });
     state = reduceOverlay(state, { type: "CLEAR" });
     expect(state).toMatchObject({ phase: "expanded-empty", conversationId: null, messages: [] });
+  });
+
+  it("loads only valid conversation roles and restores the latest user prompt", () => {
+    const state = reduceOverlay(createInitialOverlayState(true), {
+      type: "LOAD_CONVERSATION",
+      conversation: {
+        id: "thread",
+        title: "Saved chat",
+        messages: [
+          { id: "ignored", role: "system", content: "hidden" },
+          { id: "user", role: "user", content: "question" },
+          { id: "assistant", role: "assistant", content: "answer" }
+        ]
+      }
+    });
+    expect(state.messages).toHaveLength(2);
+    expect(state).toMatchObject({ conversationId: "thread", lastPrompt: "question", response: "answer" });
   });
 
   it("keeps non-conversation failures on the standalone error screen", () => {
