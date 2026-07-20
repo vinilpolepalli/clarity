@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMPACT_HEIGHT, defaultCompactBounds, transitionBounds } from "./index.mjs";
+import { COMPACT_HEIGHT, defaultCompactBounds, pickerPresentationBounds, transitionBounds } from "./index.mjs";
 
 const screen = { x: 0, y: 25, width: 1440, height: 875 };
 
@@ -18,5 +18,23 @@ describe("overlay geometry", () => {
     const compact = transitionBounds(expanded, screen, false, { compactWidth: 590 });
     expect(compact.height).toBe(COMPACT_HEIGHT);
     expect(compact.x).toBe(100);
+  });
+
+  it("opens the mode picker below without moving its anchor", () => {
+    expect(pickerPresentationBounds({ x: 100, y: 100, width: 590, height: 88 }, screen, 360)).toEqual({
+      bounds: { x: 100, y: 100, width: 590, height: 448 },
+      placement: "below",
+      viewportHeight: 360,
+      surfaceOffsetY: 0
+    });
+  });
+
+  it("opens upward near the bottom and caps the menu viewport", () => {
+    expect(pickerPresentationBounds({ x: 100, y: 800, width: 590, height: 88 }, screen, 600)).toEqual({
+      bounds: { x: 100, y: 380, width: 590, height: 508 },
+      placement: "above",
+      viewportHeight: 420,
+      surfaceOffsetY: 420
+    });
   });
 });

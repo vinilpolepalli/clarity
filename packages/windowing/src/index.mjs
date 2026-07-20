@@ -42,3 +42,20 @@ export function transitionBounds(current, workArea, expanded, remembered = {}) {
 export function boundsEqual(a, b) {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
+
+export function pickerPresentationBounds(anchorBounds, workArea, desiredHeight, maximumHeight = 420) {
+  const desired = clamp(Math.round(desiredHeight), 120, maximumHeight);
+  const workAreaBottom = workArea.y + workArea.height;
+  const belowSpace = Math.max(0, workAreaBottom - (anchorBounds.y + anchorBounds.height));
+  const aboveSpace = Math.max(0, anchorBounds.y - workArea.y);
+  const placement = belowSpace >= desired || belowSpace >= aboveSpace ? "below" : "above";
+  const available = placement === "below" ? belowSpace : aboveSpace;
+  const viewportHeight = Math.max(0, Math.min(desired, available));
+  const bounds = {
+    x: anchorBounds.x,
+    y: placement === "above" ? anchorBounds.y - viewportHeight : anchorBounds.y,
+    width: anchorBounds.width,
+    height: anchorBounds.height + viewportHeight
+  };
+  return { bounds, placement, viewportHeight, surfaceOffsetY: placement === "above" ? viewportHeight : 0 };
+}

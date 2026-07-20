@@ -14,16 +14,21 @@ import {
   systemPreferences
 } from "electron";
 import {
+  assembleSystemPrompt,
+  assertModeId,
   createInitialOverlayState,
+  createModeModel,
   DEMO_HISTORY,
   demoResponse,
   isExpandedPhase,
-  reduceOverlay
+  reduceOverlay,
+  resolveMode
 } from "@clarity/domain";
 import {
   COMPACT_HEIGHT,
   boundsEqual,
   defaultCompactBounds,
+  pickerPresentationBounds,
   transitionBounds
 } from "@clarity/windowing";
 import {
@@ -43,6 +48,7 @@ const APP_ROOT = join(import.meta.dirname, "..");
 const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo");
 const isTest = process.env.CLARITY_TEST === "1";
 const testOnboarding = process.env.CLARITY_TEST_ONBOARDING === "1";
+const SETTINGS_TABS = new Set(["general", "models", "audio", "modes", "keybindings", "profile", "privacy", "integrations", "about"]);
 const preserveTestContentProtection = process.env.CLARITY_TEST_PRESERVE_CONTENT_PROTECTION === "1";
 const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
 
@@ -61,11 +67,13 @@ let store;
 let boundsWriteTimer = null;
 let programmaticBounds = false;
 let keyConfigured = { openai: false, anthropic: false, nvidia: false };
+let activeRequestContext = null;
+let lastFailedRequestContext = null;
 let connectionRevision = 0;
 let providerConnection = untestedProviderConnection();
-let activeInference = null;
 let storage = null;
 let capture = null;
+let pickerAnchorBounds = null;
 const recentAudio = new RollingAudioBuffer();
 
 function untestedProviderConnection() {
@@ -114,7 +122,8 @@ function delay(milliseconds, signal) {
   });
 }
 
-async function runConversationInference({ requestId, createConversation, persistUser }) {
+async function runConversationInference({ context, createConversation, persistUser }) {
+  const { requestId } = context;
   const snapshot = structuredClone(overlayState);
   const conversationId = snapshot.conversationId;
   const assistantIndex = snapshot.messages.findIndex((item) => item.id === snapshot.activeAssistantMessageId);
@@ -124,14 +133,15 @@ async function runConversationInference({ requestId, createConversation, persist
   const providerMessages = snapshot.messages
     .filter((item) => (item.role === "user" || item.role === "assistant") && item.content && item.status !== "error")
     .map(({ role, content }) => ({ role, content }));
-  const inference = activeInference;
+  const selectedMode = resolveMode(context.modeId);
 
   try {
     if (createConversation) {
       await storage?.call("createConversation", {
         id: conversationId,
         title: snapshot.conversationTitle || "Untitled conversation",
-        mode: preferences.mode
+        mode: context.modeId,
+        modePromptVersion: context.promptVersion
       });
     }
     if (persistUser && userMessage) await persistConversationMessage(conversationId, userMessage, userIndex);
@@ -141,25 +151,36 @@ async function runConversationInference({ requestId, createConversation, persist
       const milliseconds = Number.isFinite(testInferenceDelay) && testInferenceDelay >= 0
         ? testInferenceDelay
         : preferences.reduceMotion ? 80 : 680;
-      await delay(milliseconds, inference.signal);
-      response = demoResponse(userMessage?.content ?? snapshot.lastPrompt);
+      await delay(milliseconds, context.controller.signal);
+      response = demoResponse(userMessage?.content ?? snapshot.lastPrompt, selectedMode);
     } else {
       const key = await readProviderKey(preferences.provider);
       response = await streamProviderResponse({
         provider: preferences.provider,
         model: preferences.model,
         messages: providerMessages,
+        systemPrompt: context.systemPrompt,
         key,
-        signal: inference.signal,
-        onToken: (_token, accumulated) => dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false })
+        signal: context.controller.signal,
+        onToken: (_token, accumulated) => {
+          if (activeRequestContext?.requestId === requestId) {
+            dispatchOverlay({ type: "STREAM", requestId, response: accumulated }, { animate: false });
+          }
+        }
       });
     }
 
-    if (overlayState.requestId !== requestId) return;
+    if (activeRequestContext?.requestId !== requestId || overlayState.requestId !== requestId) return;
     await persistConversationMessage(conversationId, { ...assistantMessage, content: response }, assistantIndex);
     dispatchOverlay({ type: "RESOLVE", requestId, response });
+    activeRequestContext = null;
+    lastFailedRequestContext = null;
   } catch (error) {
-    if (error?.name !== "AbortError") dispatchOverlay({ type: "FAIL", requestId, error: error.message });
+    if (error?.name !== "AbortError" && activeRequestContext?.requestId === requestId) {
+      lastFailedRequestContext = { ...context, controller: null };
+      activeRequestContext = null;
+      dispatchOverlay({ type: "FAIL", requestId, error: error.message });
+    }
   }
 }
 
@@ -181,8 +202,68 @@ function sendSettingsModel() {
   }
 }
 
+function getModeModel() {
+  return createModeModel(preferences.mode);
+}
+
+function sendOverlayModeModel() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send("overlay:mode-model", getModeModel());
+  }
+}
+
+async function setActiveMode(modeId) {
+  const validatedModeId = assertModeId(modeId);
+  const nextPreferences = await store.update({ mode: validatedModeId });
+  preferences = nextPreferences;
+  sendSettingsModel();
+  sendOverlayModeModel();
+  return getModeModel();
+}
+
 function displayForBounds(bounds) {
   return screen.getDisplayMatching(bounds).workArea;
+}
+
+function validatePickerLayout(layout) {
+  const desiredHeight = Number(layout?.desiredHeight);
+  const anchorRect = layout?.anchorRect;
+  if (!Number.isFinite(desiredHeight) || desiredHeight < 120 || desiredHeight > 800) throw new TypeError("Invalid mode picker height");
+  if (!anchorRect || [anchorRect.x, anchorRect.y, anchorRect.width, anchorRect.height].some((value) => !Number.isFinite(Number(value)))) {
+    throw new TypeError("Invalid mode picker anchor");
+  }
+  return { desiredHeight };
+}
+
+function openModePicker(layout) {
+  if (!overlayWindow || overlayWindow.isDestroyed() || overlayState.phase === "hidden") throw new Error("Overlay is not available");
+  const { desiredHeight } = validatePickerLayout(layout);
+  if (pickerAnchorBounds) closeModePicker();
+  const anchorBounds = overlayWindow.getBounds();
+  const presentation = pickerPresentationBounds(anchorBounds, displayForBounds(anchorBounds), desiredHeight);
+  if (presentation.viewportHeight < 120) throw new Error("There is not enough room to open the mode picker");
+  pickerAnchorBounds = anchorBounds;
+  programmaticBounds = true;
+  overlayWindow.setMinimumSize(1, 1);
+  overlayWindow.setMaximumSize(displayForBounds(anchorBounds).width, displayForBounds(anchorBounds).height);
+  overlayWindow.setResizable(false);
+  overlayWindow.setBounds(presentation.bounds, false);
+  setTimeout(() => { programmaticBounds = false; }, 0);
+  return { placement: presentation.placement, viewportHeight: presentation.viewportHeight, surfaceOffsetY: presentation.surfaceOffsetY };
+}
+
+function closeModePicker({ notifyRenderer = false } = {}) {
+  if (!pickerAnchorBounds || !overlayWindow || overlayWindow.isDestroyed()) return false;
+  const anchorBounds = pickerAnchorBounds;
+  pickerAnchorBounds = null;
+  programmaticBounds = true;
+  overlayWindow.setMinimumSize(1, 1);
+  overlayWindow.setMaximumSize(displayForBounds(anchorBounds).width, displayForBounds(anchorBounds).height);
+  overlayWindow.setBounds(anchorBounds, false);
+  applyOverlayPresentation(overlayState.phase, false);
+  setTimeout(() => { programmaticBounds = false; }, 0);
+  if (notifyRenderer) overlayWindow.webContents.send("overlay:picker-closed");
+  return true;
 }
 
 function rememberedGeometry() {
@@ -230,38 +311,60 @@ function applyOverlayPresentation(previousPhase, animate = true) {
 }
 
 function dispatchOverlay(event, options = {}) {
+  if (pickerAnchorBounds && event.type !== "SET_PROMPT") closeModePicker({ notifyRenderer: true });
+  if (event.type === "CLEAR") {
+    activeRequestContext?.controller.abort();
+    activeRequestContext = null;
+    lastFailedRequestContext = null;
+  }
+  let effectiveEvent = event;
+  let retrySource = null;
+  if (event.type === "RETRY") {
+    retrySource = lastFailedRequestContext;
+    if (!retrySource) return structuredClone(overlayState);
+    effectiveEvent = { type: "RETRY", prompt: retrySource.prompt, requestId: crypto.randomUUID() };
+  }
   const previousPhase = overlayState.phase;
   const previousRequestId = overlayState.requestId;
   const previousConversationId = overlayState.conversationId;
-  overlayState = reduceOverlay(overlayState, event);
+  overlayState = reduceOverlay(overlayState, effectiveEvent);
   applyOverlayPresentation(previousPhase, options.animate !== false);
   sendOverlayState();
 
-  if (event.type === "START_LISTENING" && capture) {
+  if (effectiveEvent.type === "START_LISTENING" && capture) {
     void capture.start({ microphone: true, systemAudio: Boolean(preferences.captureSystemAudio) }).catch((error) => {
       dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
       dispatchOverlay({ type: "FAIL", error: `Capture could not start: ${error.message}` });
     });
   }
-  if (event.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
+  if (effectiveEvent.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
 
-  if (event.type === "CLEAR") activeInference?.abort();
-
-  if ((event.type === "SUBMIT" || event.type === "RETRY") && overlayState.requestId && overlayState.requestId !== previousRequestId) {
+  if ((effectiveEvent.type === "SUBMIT" || effectiveEvent.type === "RETRY") && overlayState.requestId && overlayState.requestId !== previousRequestId) {
+    activeRequestContext?.controller.abort();
     const requestId = overlayState.requestId;
-    activeInference?.abort();
-    activeInference = new AbortController();
-    void runConversationInference({
+    const prompt = retrySource?.prompt ?? overlayState.lastPrompt;
+    const assembled = retrySource
+      ? { modeId: retrySource.modeId, promptVersion: retrySource.promptVersion, systemPrompt: retrySource.systemPrompt }
+      : assembleSystemPrompt(preferences.mode);
+    const context = {
       requestId,
-      createConversation: event.type === "SUBMIT" && !previousConversationId,
-      persistUser: event.type === "SUBMIT"
+      prompt,
+      ...assembled,
+      controller: new AbortController()
+    };
+    activeRequestContext = context;
+    if (effectiveEvent.type === "SUBMIT") lastFailedRequestContext = null;
+    void runConversationInference({
+      context,
+      createConversation: effectiveEvent.type === "SUBMIT" && !previousConversationId,
+      persistUser: effectiveEvent.type === "SUBMIT"
     });
   }
   return structuredClone(overlayState);
 }
 
 function queueBoundsWrite() {
-  if (programmaticBounds || !overlayWindow || overlayWindow.isDestroyed()) return;
+  if (programmaticBounds || pickerAnchorBounds || !overlayWindow || overlayWindow.isDestroyed()) return;
   clearTimeout(boundsWriteTimer);
   boundsWriteTimer = setTimeout(() => {
     const bounds = overlayWindow.getBounds();
@@ -309,6 +412,7 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
   applyOverlayContentProtection();
   overlayWindow.on("move", queueBoundsWrite);
   overlayWindow.on("resize", queueBoundsWrite);
+  overlayWindow.on("will-move", () => { if (!programmaticBounds) closeModePicker({ notifyRenderer: true }); });
   overlayWindow.on("close", (event) => {
     if (!app.isQuitting && !isTest) {
       event.preventDefault();
@@ -316,7 +420,7 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
     }
   });
   overlayWindow.loadURL(rendererTarget("overlay"));
-  overlayWindow.webContents.once("did-finish-load", () => sendOverlayState());
+  overlayWindow.webContents.once("did-finish-load", () => { sendOverlayState(); sendOverlayModeModel(); });
   if (showWhenReady) {
     const restoredWindow = overlayWindow;
     restoredWindow.once("ready-to-show", () => {
@@ -386,6 +490,7 @@ function getSettingsModel() {
     : { curated: curatedModels(provider), discoverySupported: provider === "nvidia" || provider === "openai" };
   return {
     preferences: structuredClone(preferences),
+    modeModel: getModeModel(),
     permissions: permissionStatus(),
     app: { version: app.getVersion(), packaged: app.isPackaged, demo: isDemo },
     onboarding: !preferences.onboardingComplete,
@@ -398,6 +503,10 @@ function getSettingsModel() {
 function registerIpc() {
   ipcMain.handle("overlay:get-state", () => structuredClone(overlayState));
   ipcMain.handle("overlay:dispatch", (_event, action) => dispatchOverlay(action));
+  ipcMain.handle("overlay:get-mode-model", () => getModeModel());
+  ipcMain.handle("overlay:set-mode", (_event, modeId) => setActiveMode(modeId));
+  ipcMain.handle("overlay:open-mode-picker", (_event, layout) => openModePicker(layout));
+  ipcMain.handle("overlay:close-mode-picker", () => closeModePicker());
   ipcMain.handle("overlay:get-history", async () => {
     const local = storage ? await storage.call("list", { limit: 50 }) : [];
     return local.length ? local : structuredClone(DEMO_HISTORY);
@@ -418,9 +527,18 @@ function registerIpc() {
       messages
     };
     if (!storage) return conversation;
-    return storage.call("ensureConversation", { ...conversation, mode: preferences.mode });
+    const assembled = assembleSystemPrompt(preferences.mode);
+    return storage.call("ensureConversation", { ...conversation, mode: assembled.modeId, modePromptVersion: assembled.promptVersion });
   });
-  ipcMain.handle("overlay:open-settings", () => { createSettingsWindow(); return true; });
+  ipcMain.handle("overlay:open-settings", async (_event, tab) => {
+    if (tab !== undefined && !SETTINGS_TABS.has(tab)) throw new TypeError("Unknown settings tab");
+    if (tab !== undefined && preferences.selectedSettingsTab !== tab) {
+      preferences = await store.update({ selectedSettingsTab: tab });
+    }
+    createSettingsWindow();
+    sendSettingsModel();
+    return true;
+  });
 
   ipcMain.handle("settings:get-model", () => getSettingsModel());
   ipcMain.handle("settings:update", async (_event, patch) => {
@@ -431,6 +549,7 @@ function registerIpc() {
       "cloudEnabled", "integrations", "keybindings", "customModels"
     ];
     const safePatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => allowed.includes(key)));
+    if (Object.hasOwn(safePatch, "mode")) safePatch.mode = assertModeId(safePatch.mode);
     const connectionChanged = (Object.hasOwn(safePatch, "provider") && safePatch.provider !== preferences.provider)
       || (Object.hasOwn(safePatch, "model") && safePatch.model !== preferences.model);
     preferences = await store.update(safePatch);
@@ -449,6 +568,7 @@ function registerIpc() {
       }
     }
     sendSettingsModel();
+    if (Object.hasOwn(safePatch, "mode")) sendOverlayModeModel();
     return getSettingsModel();
   });
   ipcMain.handle("settings:complete-onboarding", async () => {
@@ -521,6 +641,9 @@ function registerIpc() {
       overlay: structuredClone(overlayState),
       bounds: overlayWindow?.getBounds(),
       settings: getSettingsModel(),
+      pickerOpen: Boolean(pickerAnchorBounds),
+      activeRequest: activeRequestContext ? { requestId: activeRequestContext.requestId, modeId: activeRequestContext.modeId, promptVersion: activeRequestContext.promptVersion } : null,
+      failedRequest: lastFailedRequestContext ? { modeId: lastFailedRequestContext.modeId, promptVersion: lastFailedRequestContext.promptVersion } : null,
       contentProtected: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isContentProtected()),
       resizable: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isResizable())
     }));
@@ -586,6 +709,8 @@ async function boot() {
   overlayState = createInitialOverlayState(showOverlayAtBoot);
   registerIpc();
   createOverlayWindow();
+  screen.on("display-removed", () => closeModePicker({ notifyRenderer: true }));
+  screen.on("display-metrics-changed", () => closeModePicker({ notifyRenderer: true }));
   createApplicationMenu();
   globalShortcut.register(preferences.keybindings.toggleOverlay, () => dispatchOverlay({ type: "TOGGLE_VISIBILITY" }));
   globalShortcut.register(preferences.keybindings.toggleListening, () => dispatchOverlay({ type: overlayState.startedAt ? "STOP_LISTENING" : "START_LISTENING" }));

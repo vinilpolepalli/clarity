@@ -11,7 +11,7 @@
   "scripts": {
     "build": "turbo run build",
     "build:native": "swift build -c release --package-path native/ClarityCapture",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm typecheck && pnpm test && pnpm --filter @clarity/desktop test:storage && pnpm build",
     "dev": "pnpm --filter @clarity/desktop dev",
     "demo": "pnpm --filter @clarity/desktop demo",
     "e2e": "pnpm --filter @clarity/desktop e2e",

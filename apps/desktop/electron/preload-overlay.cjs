@@ -13,11 +13,25 @@ const overlayBridge = {
   },
   getHistory: () => ipcRenderer.invoke("overlay:get-history"),
   getConversation: (id) => ipcRenderer.invoke("overlay:get-conversation", id),
-  openSettings: () => ipcRenderer.invoke("overlay:open-settings"),
+  getModeModel: () => ipcRenderer.invoke("overlay:get-mode-model"),
+  setMode: (modeId) => ipcRenderer.invoke("overlay:set-mode", modeId),
+  openModePicker: (layout) => ipcRenderer.invoke("overlay:open-mode-picker", layout),
+  closeModePicker: () => ipcRenderer.invoke("overlay:close-mode-picker"),
+  openSettings: (tab) => ipcRenderer.invoke("overlay:open-settings", tab),
   onState: (listener) => {
     const handler = (_event, state) => listener(state);
     ipcRenderer.on("overlay:state", handler);
     return () => ipcRenderer.removeListener("overlay:state", handler);
+  },
+  onModeModel: (listener) => {
+    const handler = (_event, model) => listener(model);
+    ipcRenderer.on("overlay:mode-model", handler);
+    return () => ipcRenderer.removeListener("overlay:mode-model", handler);
+  },
+  onPickerClosed: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("overlay:picker-closed", handler);
+    return () => ipcRenderer.removeListener("overlay:picker-closed", handler);
   }
 };
 

@@ -12,6 +12,7 @@
     "demo": "pnpm build && CLARITY_DEMO=1 electron .",
     "e2e": "pnpm build && playwright test",
     "package:mac": "electron-builder --mac --publish never",
+    "test:storage": "ELECTRON_RUN_AS_NODE=1 electron scripts/storage-migration-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -45,7 +46,11 @@
       "electron/**/*",
       "package.json",
       "../../packages/domain/src/**/*",
+      "../../packages/domain/package.json",
+      "../../packages/providers/src/**/*",
+      "../../packages/providers/package.json",
       "../../packages/windowing/src/**/*",
+      "../../packages/windowing/package.json",
       "!**/.turbo/**",
       "!**/*.test.*"
     ],

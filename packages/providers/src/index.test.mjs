@@ -17,12 +17,14 @@ describe("provider adapters", () => {
       provider: "anthropic",
       model: "claude",
       messages: [{ role: "user", content: "hello" }, { role: "assistant", content: "Hi" }, { role: "user", content: "build on that" }],
+      systemPrompt: "coding mode",
       key: "secret-key"
     });
     expect(request.init.headers["x-api-key"]).toBe("secret-key");
     expect(request.init.body).not.toContain("secret-key");
     expect(JSON.parse(request.init.body)).toMatchObject({
       stream: true,
+      system: "coding mode",
       messages: [
         { role: "user", content: "hello" },
         { role: "assistant", content: "Hi" },
@@ -36,9 +38,12 @@ describe("provider adapters", () => {
       provider: "nvidia",
       model: "model",
       messages: [{ role: "user", content: "first" }, { role: "assistant", content: "answer" }, { role: "user", content: "follow up" }],
+      systemPrompt: "sales mode",
       key: "nvapi-test"
     });
-    expect(JSON.parse(request.init.body).messages.slice(1)).toEqual([
+    const body = JSON.parse(request.init.body);
+    expect(body.messages[0]).toEqual({ role: "system", content: "sales mode" });
+    expect(body.messages.slice(1)).toEqual([
       { role: "user", content: "first" },
       { role: "assistant", content: "answer" },
       { role: "user", content: "follow up" }
@@ -64,7 +69,11 @@ describe("provider adapters", () => {
 
   it("rejects histories that contain no usable user turn", () => {
     expect(boundedConversationMessages([{ role: "assistant", content: "orphaned" }])).toEqual([]);
-    expect(() => buildProviderRequest({ provider: "openai", model: "model", messages: [{ role: "assistant", content: "orphaned" }], key: "key" })).toThrow("at least one user message");
+    expect(() => buildProviderRequest({ provider: "openai", model: "model", messages: [{ role: "assistant", content: "orphaned" }], systemPrompt: "test", key: "key" })).toThrow("at least one user message");
+  });
+
+  it("rejects a blank system prompt before building a request", () => {
+    expect(() => buildProviderRequest({ provider: "openai", model: "gpt", prompt: "hello", systemPrompt: " ", key: "secret-key" })).toThrow("system prompt is required");
   });
 
   it("parses OpenAI-compatible and Anthropic tokens", () => {
@@ -164,9 +173,9 @@ describe("provider capabilities", () => {
 
   it("normalizes streaming HTTP failures and empty response bodies", async () => {
     const rateLimited = vi.fn(async () => new Response("rate limited", { status: 429 }));
-    await expect(streamProviderResponse({ provider: "nvidia", model: "a/model", prompt: "hello", key: "secret", fetchImpl: rateLimited })).rejects.toMatchObject({ code: "rate_limited" });
+    await expect(streamProviderResponse({ provider: "nvidia", model: "a/model", prompt: "hello", systemPrompt: "test mode", key: "secret", fetchImpl: rateLimited })).rejects.toMatchObject({ code: "rate_limited" });
     const empty = vi.fn(async () => new Response(null, { status: 200 }));
-    await expect(streamProviderResponse({ provider: "nvidia", model: "a/model", prompt: "hello", key: "secret", fetchImpl: empty })).rejects.toMatchObject({ code: "empty_response" });
+    await expect(streamProviderResponse({ provider: "nvidia", model: "a/model", prompt: "hello", systemPrompt: "test mode", key: "secret", fetchImpl: empty })).rejects.toMatchObject({ code: "empty_response" });
   });
 
   it("normalizes invalid keys and redacts provider details", async () => {

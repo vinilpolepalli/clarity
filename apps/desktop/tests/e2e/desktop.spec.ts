@@ -172,6 +172,73 @@ test("fresh launch completes the split onboarding without forced permissions", a
   }
 });
 
+test("built-in modes stay synchronized across Settings, the overlay, inference, and native picker bounds", async () => {
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    const initial = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    await expect(overlay.getByRole("button", { name: "Assistant mode: General" })).toBeVisible();
+
+    await overlay.getByRole("button", { name: "Assistant mode: General" }).click();
+    await expect(overlay.getByRole("listbox", { name: "Assistant mode" })).toBeVisible();
+    const opened = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(opened.pickerOpen).toBe(true);
+    expect(opened.bounds.height).toBeGreaterThan(initial.bounds.height);
+    await expect(overlay).toHaveScreenshot("overlay-mode-picker.png");
+
+    await overlay.getByRole("option", { name: "Coding Interview" }).click();
+    await expect(overlay.getByRole("button", { name: "Assistant mode: Coding Interview" })).toBeVisible();
+    const restored = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(restored.pickerOpen).toBe(false);
+    expect(restored.bounds).toEqual(initial.bounds);
+
+    await overlay.getByRole("button", { name: "Assistant mode: Coding Interview" }).click();
+    await overlay.getByRole("button", { name: "Manage" }).click();
+    const settings = await pageByTitle(application, "Clarity");
+    await expect(settings.getByRole("heading", { name: "Modes" })).toBeVisible();
+    await expect(settings.getByRole("option", { name: "General" })).toBeVisible();
+    await expect(settings.getByRole("option", { name: "Lecture" })).toBeVisible();
+    await expect(settings).toHaveScreenshot("settings-modes.png");
+
+    await settings.getByRole("option", { name: "Sales Call" }).click();
+    await expect(settings.locator(".mode-detail").getByRole("heading", { name: "Sales Call" })).toBeVisible();
+    await expect(overlay.getByRole("button", { name: "Assistant mode: Coding Interview" })).toBeVisible();
+    await settings.getByRole("button", { name: "Set Active" }).click();
+    await expect(overlay.getByRole("button", { name: "Assistant mode: Sales Call" })).toBeVisible();
+
+    await settings.getByRole("option", { name: "Team Meeting" }).click();
+    await overlay.evaluate(() => window.clarityOverlay.setMode("lecture"));
+    await expect(settings.locator(".mode-detail").getByRole("heading", { name: "Team Meeting" })).toBeVisible();
+    await expect(overlay.getByRole("button", { name: "Assistant mode: Lecture" })).toBeVisible();
+    await expect(overlay.evaluate(() => window.clarityOverlay.setMode("unknown-mode"))).rejects.toThrow("Unknown mode");
+
+    await overlay.evaluate(async () => {
+      await window.clarityOverlay.setMode("coding-interview");
+      await window.clarityOverlay.dispatch({ type: "SUBMIT", prompt: "Explain the next approach" });
+      await window.clarityOverlay.setMode("sales");
+    });
+    await expect(overlay.getByText(/Coding Interview mode/)).toBeVisible();
+    const completed = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(completed.settings.modeModel.activeModeId).toBe("sales");
+    expect(completed.activeRequest).toBeNull();
+
+    await overlay.evaluate(async () => {
+      await window.clarityOverlay.setMode("coding-interview");
+      await window.clarityOverlay.dispatch({ type: "SUBMIT", prompt: "trigger an error" });
+    });
+    await expect(overlay.getByText(/local demo provider intentionally failed/)).toBeVisible();
+    await overlay.evaluate(() => window.clarityOverlay.setMode("sales"));
+    await overlay.getByRole("button", { name: "Try again" }).click();
+    await expect(overlay.getByText(/local demo provider intentionally failed/)).toBeVisible();
+    const retried = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(retried.failedRequest).toEqual({ modeId: "coding-interview", promptVersion: 1 });
+    expect(retried.settings.modeModel.activeModeId).toBe("sales");
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
 test("screen-share protection toggles immediately and persists", async () => {
   test.setTimeout(90_000);
   const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-protection-"));
