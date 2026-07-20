@@ -147,9 +147,11 @@ test("fresh launch completes the split onboarding without forced permissions", a
 });
 
 test("screen context persists, discloses its preview, and expires on clear", async () => {
-  const { application, userData } = await launch({ CLARITY_TEST_SCREEN_CONTEXT: "1" });
+  const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-screen-"));
+  let application: Awaited<ReturnType<typeof electron.launch>> | null = null;
   try {
-    const overlay = await pageByTitle(application, "Clarity Overlay");
+    ({ application } = await launch({ CLARITY_TEST_SCREEN_CONTEXT: "1" }, userData));
+    let overlay = await pageByTitle(application, "Clarity Overlay");
     const screenToggle = overlay.getByRole("button", { name: "Does not use screen" });
     await screenToggle.click();
     await expect(overlay.getByRole("button", { name: "Uses screen" })).toHaveAttribute("aria-pressed", "true");
@@ -182,6 +184,59 @@ test("screen context persists, discloses its preview, and expires on clear", asy
     const cleared = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
     expect(cleared.overlay.screenContext.enabled).toBe(true);
     expect(cleared.settings.preferences.screenContextEnabled).toBe(true);
+
+    await application.close();
+    application = null;
+    ({ application } = await launch({ CLARITY_TEST_SCREEN_CONTEXT: "1" }, userData));
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    await expect(overlay.getByRole("button", { name: "Uses screen" })).toHaveAttribute("aria-pressed", "true");
+    const restored = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(restored.settings.preferences.screenContextEnabled).toBe(true);
+
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Trigger an error after viewing my screen");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect(overlay.getByText("The local demo provider intentionally failed")).toBeVisible();
+    const errorDisclosure = overlay.getByRole("button", { name: "Viewed screen" });
+    await expect(errorDisclosure).toBeVisible();
+    await errorDisclosure.hover();
+    await expect(overlay.getByAltText("Screen captured for this response")).toBeVisible();
+  } finally {
+    await application?.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
+test("screen capture survives overlay recreation requested from Privacy settings", async () => {
+  const { application, userData } = await launch({
+    CLARITY_TEST_SCREEN_CONTEXT: "1",
+    CLARITY_TEST_SCREEN_CAPTURE_DELAY: "1000",
+    CLARITY_TEST_PRESERVE_CONTENT_PROTECTION: "1",
+    CLARITY_TEST_FORCE_OVERLAY_RECREATION: "1"
+  });
+  try {
+    let overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("button", { name: "Does not use screen" }).click();
+    const initialWindowId = (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).windowId;
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What is visible right now?");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect.poll(async () => (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlay.screenContext.status).toBe("capturing");
+
+    await overlay.evaluate(() => window.clarityOverlay.openSettings());
+    const settings = await pageByTitle(application, "Clarity");
+    await settings.getByRole("button", { name: "Privacy" }).click();
+    const protection = settings.getByRole("switch", { name: "Hide overlay from screen sharing (best effort)" });
+    await expect(protection).toHaveAttribute("aria-checked", "true");
+    await protection.click();
+    await expect(protection).toHaveAttribute("aria-checked", "false");
+
+    await settings.waitForTimeout(1_400);
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    await expect(overlay.getByRole("button", { name: "Viewed screen" })).toBeVisible();
+    await expect(overlay.getByText("I heard: “What is visible right now?”")).toBeVisible();
+    const after = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(after.windowId).not.toBe(initialWindowId);
+    expect(after.overlay.screenContext.status).toBe("attached");
+    expect(after.contentProtected).toBe(false);
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });

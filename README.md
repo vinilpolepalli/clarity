@@ -50,7 +50,7 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 build
 COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 e2e
 ```
 
-The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, screen-share protection toggling and restart persistence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
+The Electron E2E suite verifies compact/expanded bounds, anchor retention, narrow reflow, threaded follow-ups, saved-conversation reopening, New chat cancellation, deterministic responses, settings independence, screen-context opt-in and restart persistence, ephemeral previews, screen-share protection toggling and restart persistence, privacy wording, collapse restoration, and permission-optional onboarding. It also stores visual baselines for compact, response, Settings, and onboarding surfaces.
 
 ## Package
 
@@ -64,7 +64,9 @@ This builds the Swift helper in release mode, bundles it as an extra resource, b
 
 Clarity’s provider keys, audio capture, local transcription, inference calls, SQLite database, and local search are desktop responsibilities. Optional cloud features receive only explicitly reviewed encrypted artifact envelopes. Integrations are individually disabled by default and require an explicit destination and confirmation before export.
 
-ScreenCaptureKit permission is used for system audio. Screen pixels are not stored by default. `setContentProtection` reduces exposure in many common capture paths but cannot protect against every app, OS change, external camera, or capture technique.
+Screen Recording permission is used for system audio and for the optional, default-off `Uses screen` feature. When that toggle is enabled, Clarity captures the display containing the overlay for each submitted question and sends that screenshot directly to the selected BYOK model provider with the conversation request. The overlay is hidden before capture. Screenshot bytes and previews remain only in desktop memory, are replaced by the next request, and are never written to conversation history or cloud sync. Each attached capture is disclosed as `Viewed screen`, including when the provider returns an error.
+
+`setContentProtection` reduces exposure in many common capture paths but cannot protect against every app, OS change, external camera, or capture technique.
 
 The overlay protection switch is enabled by default and can be turned off when the user intentionally wants to share Clarity. See [Content protection compatibility](docs/content-protection.md) for the exact support boundary and qualification matrix.
 

@@ -113,10 +113,10 @@ function ViewedScreen({ state }: { state: OverlayState }) {
   );
 }
 
-function ConversationTurn({ message, state, retry }: { message: ConversationMessage; state: OverlayState; retry: () => void }) {
+function ConversationTurn({ message, state, isLatestAssistant, retry }: { message: ConversationMessage; state: OverlayState; isLatestAssistant: boolean; retry: () => void }) {
   if (message.role === "user") return <div className="chat-turn user-turn"><div className="user-bubble">{message.content}</div></div>;
   const streamingEmpty = message.status === "streaming" && !message.content;
-  const viewedCurrentScreen = message.status === "complete" && message.id === [...state.messages].reverse().find((item) => item.role === "assistant")?.id;
+  const viewedCurrentScreen = isLatestAssistant && Boolean(state.screenContext.attachmentId);
   return (
     <div className={`chat-turn assistant-turn ${message.status === "error" ? "has-error" : ""}`}>
       <div className="assistant-meta"><span className="assistant-avatar"><BrandMark size={18} /></span><strong>Clarity</strong>{message.status === "streaming" && <small>Thinking…</small>}</div>
@@ -213,11 +213,15 @@ function ExpandedBody({
     );
   }
 
+  let latestAssistantMessageId: string | undefined;
+  for (const item of state.messages) {
+    if (item.role === "assistant") latestAssistantMessageId = item.id;
+  }
   return (
     <section className="expanded-content conversation-state" aria-label="Conversation with Clarity">
       <div className="conversation-heading"><div><span className="eyebrow">Conversation</span><h2>{state.conversationTitle || "Chat with Clarity"}</h2></div><button className="quiet-action" type="button" onClick={() => dispatch({ type: "CLEAR" })}><MessageSquarePlus size={13} /> New chat</button></div>
       <div className="chat-thread" role="log" aria-live="polite" aria-relevant="additions text">
-        {state.messages.map((message) => <ConversationTurn key={message.id} message={message} state={state} retry={() => dispatch({ type: "RETRY" })} />)}
+        {state.messages.map((message) => <ConversationTurn key={message.id} message={message} state={state} isLatestAssistant={message.id === latestAssistantMessageId} retry={() => dispatch({ type: "RETRY" })} />)}
         <div ref={conversationEnd} />
       </div>
       <div className="response-footer"><span><ShieldCheck size={13} /> Conversation stored on this Mac</span><span>{state.messages.length} {state.messages.length === 1 ? "message" : "messages"}</span></div>

@@ -88,6 +88,10 @@ export class ScreenContextService {
     this.clear();
   }
 
+  setOverlayWindow(overlayWindow) {
+    this.overlayWindow = overlayWindow;
+  }
+
   async capture(requestId, snapshot, { signal } = {}) {
     this.clear();
     this.ownerRequestId = requestId;

@@ -34,6 +34,8 @@ Provider keys use the macOS `security` command against a dedicated generic-passw
 
 Provider calls receive the current conversation rather than only the newest prompt. The desktop bounds context to the latest 24 messages and 18,000 characters before sending it, so follow-ups retain useful history without allowing a thread to grow requests indefinitely.
 
+Screen context is a separate, persistent preference that defaults off. For an enabled request, the Electron main process freezes the overlay's current display, temporarily hides the overlay, captures and bounds a PNG in memory, and attaches it only to the newest user turn sent to an explicitly image-capable provider/model pair. The renderer receives metadata and an authorized ephemeral preview, never raw capture authority. Screenshot bytes are owned by the active request, replaced on the next request, cleared on conversation reset or renderer failure, and excluded from SQLite and optional cloud sync. The assistant turn keeps a `Viewed screen` disclosure even if inference fails after transmission.
+
 ## Capture and transcription
 
 The Swift helper accepts newline-delimited versioned control messages. It emits microphone and ScreenCaptureKit audio frames with an epoch, monotonic sequence number, source, sample rate, and channel count. The desktop client detects gaps, drops oldest frames under pressure, and retains a bounded rolling window.

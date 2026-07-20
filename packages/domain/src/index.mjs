@@ -10,6 +10,13 @@ export const OVERLAY_PHASES = Object.freeze([
   "expanded-history"
 ]);
 
+export const DEFAULT_PROVIDER_MODELS = Object.freeze({
+  demo: "clarity-demo",
+  nvidia: "meta/llama-3.2-11b-vision-instruct",
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-sonnet-5"
+});
+
 export const DEFAULT_PREFERENCES = Object.freeze({
   version: 1,
   onboardingComplete: false,
@@ -25,12 +32,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   screenContextEnabled: false,
   provider: "demo",
   model: "clarity-demo",
-  providerModels: {
-    demo: "clarity-demo",
-    nvidia: "meta/llama-3.2-11b-vision-instruct",
-    openai: "gpt-4.1-mini",
-    anthropic: "claude-sonnet"
-  },
+  providerModels: DEFAULT_PROVIDER_MODELS,
   imageInputOverrides: {},
   mode: "meeting",
   selectedSettingsTab: "general",

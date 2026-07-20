@@ -31,12 +31,14 @@ function fakeWindow() {
 
 function service({ permission = "granted", sources } = {}) {
   const overlayWindow = fakeWindow();
+  const permissions = Array.isArray(permission) ? [...permission] : [permission];
+  let permissionIndex = 0;
   return {
     overlayWindow,
     instance: new ScreenContextService({
       desktopCapturer: { getSources: vi.fn(async () => sources ?? [{ display_id: "2", thumbnail: fakeImage() }]) },
       screen: { getAllDisplays: () => [{ id: 2, size: { width: 2560, height: 1440 } }] },
-      systemPreferences: { getMediaAccessStatus: () => permission },
+      systemPreferences: { getMediaAccessStatus: () => permissions[Math.min(permissionIndex++, permissions.length - 1)] },
       overlayWindow,
       platform: "darwin",
       settle: async () => {}
@@ -72,5 +74,52 @@ describe("ScreenContextService", () => {
   it("reports a display topology change instead of capturing a different source", async () => {
     const { instance } = service();
     await expect(instance.capture("request-1", { targetDisplayId: 99 })).rejects.toBeInstanceOf(ScreenContextError);
+  });
+
+  it.each([
+    ["restricted", "permission-restricted"],
+    ["unexpected", "permission-unknown"]
+  ])("fails closed for %s permission", async (permission, code) => {
+    const { instance } = service({ permission });
+    await expect(instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code });
+    expect(instance.metadata()).toBeNull();
+  });
+
+  it("fails closed when permission remains unresolved after capture is requested", async () => {
+    const { instance } = service({ permission: ["not-determined", "denied"] });
+    await expect(instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "permission-denied" });
+    expect(instance.metadata()).toBeNull();
+  });
+
+  it("clears and restores the overlay when the capture source is unavailable or empty", async () => {
+    const unavailable = service({ sources: [] });
+    await expect(unavailable.instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "source-unavailable" });
+    expect(unavailable.instance.metadata()).toBeNull();
+    expect(unavailable.overlayWindow.showInactive).toHaveBeenCalled();
+
+    const empty = service({ sources: [{ display_id: "2", thumbnail: { isEmpty: () => true } }] });
+    await expect(empty.instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "empty-capture" });
+    expect(empty.instance.metadata()).toBeNull();
+    expect(empty.overlayWindow.showInactive).toHaveBeenCalled();
+  });
+
+  it("rejects an oversized capture after exhausting resize attempts", async () => {
+    const oversizedImage = {
+      isEmpty: () => false,
+      getSize: () => ({ width: 2560, height: 1440 }),
+      toPNG: () => Buffer.alloc(5 * 1024 * 1024 + 1, 1),
+      resize: () => oversizedImage
+    };
+    const { instance } = service({ sources: [{ display_id: "2", thumbnail: oversizedImage }] });
+    await expect(instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "oversized-capture" });
+    expect(instance.metadata()).toBeNull();
+  });
+
+  it("cleans up when capture is cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { instance } = service();
+    await expect(instance.capture("request-1", { targetDisplayId: 2 }, { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    expect(instance.metadata()).toBeNull();
   });
 });

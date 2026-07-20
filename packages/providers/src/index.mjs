@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DEFAULT_PROVIDER_MODELS } from "@clarity/domain";
 
 const PROVIDERS = Object.freeze({
   openai: { endpoint: "https://api.openai.com/v1/chat/completions", header: "authorization" },
@@ -7,9 +8,9 @@ const PROVIDERS = Object.freeze({
 });
 
 const SUPPORTED_MODELS = Object.freeze({
-  openai: new Set(["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"]),
-  nvidia: new Set(["meta/llama-3.2-11b-vision-instruct", "meta/llama-3.2-90b-vision-instruct"]),
-  anthropic: new Set(["claude-sonnet"])
+  openai: new Set(["gpt-4.1", DEFAULT_PROVIDER_MODELS.openai, "gpt-4o", "gpt-4o-mini"]),
+  nvidia: new Set([DEFAULT_PROVIDER_MODELS.nvidia, "meta/llama-3.2-90b-vision-instruct"]),
+  anthropic: new Set([DEFAULT_PROVIDER_MODELS.anthropic])
 });
 
 const UNSUPPORTED_MODELS = Object.freeze({
@@ -163,6 +164,8 @@ export function parseServerSentEvent(provider, eventText) {
 function redactProviderDetail(value) {
   return String(value)
     .replace(/data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+/gi, "[redacted screenshot]")
+    .replace(/("data"\s*:\s*")[A-Za-z0-9+/=]{32,}/gi, "$1[redacted screenshot]")
+    .replace(/[A-Za-z0-9+/]{128,}={0,2}/g, "[redacted base64]")
     .replace(/(?:sk|nvapi)-[A-Za-z0-9_-]+/g, "[redacted]");
 }
 

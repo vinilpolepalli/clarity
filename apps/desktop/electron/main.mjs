@@ -39,7 +39,9 @@ const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo
 const isTest = process.env.CLARITY_TEST === "1";
 const testOnboarding = process.env.CLARITY_TEST_ONBOARDING === "1";
 const preserveTestContentProtection = process.env.CLARITY_TEST_PRESERVE_CONTENT_PROTECTION === "1";
+const forceTestOverlayRecreation = isTest && process.env.CLARITY_TEST_FORCE_OVERLAY_RECREATION === "1";
 const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
+const testScreenCaptureDelay = isTest ? Number(process.env.CLARITY_TEST_SCREEN_CAPTURE_DELAY) : Number.NaN;
 
 app.setName("Clarity");
 if (isTest && process.env.CLARITY_TEST_USER_DATA) app.setPath("userData", process.env.CLARITY_TEST_USER_DATA);
@@ -61,6 +63,7 @@ let activeSubmission = null;
 let storage = null;
 let capture = null;
 let screenContext = null;
+let pendingOverlayRecreation = false;
 const recentAudio = new RollingAudioBuffer();
 
 function applyOverlayContentProtection() {
@@ -104,6 +107,7 @@ async function runConversationInference({ requestId, createConversation, persist
     .filter((item) => (item.role === "user" || item.role === "assistant") && item.content && item.status !== "error")
     .map(({ role, content }) => ({ role, content }));
   const inference = activeInference;
+  const requestScreenContext = screenContext;
   const targetDisplayId = String(screen.getDisplayMatching(overlayWindow.getBounds()).id);
   const request = {
     requestId,
@@ -140,14 +144,16 @@ async function runConversationInference({ requestId, createConversation, persist
         return;
       }
       dispatchOverlay({ type: "SCREEN_CAPTURE_STARTED", requestId }, { animate: false });
-      const metadata = await screenContext.capture(requestId, request, { signal: inference.signal });
+      if (!requestScreenContext) throw new ScreenContextError("capture-unavailable", "Screen capture is not available yet. Try again.");
+      const metadata = await requestScreenContext.capture(requestId, request, { signal: inference.signal });
       if (overlayState.requestId !== requestId) return;
       dispatchOverlay({ type: "SCREEN_CAPTURE_ATTACHED", requestId, attachmentId: metadata.id, capturedAt: metadata.capturedAt, displayId: metadata.displayId }, { animate: false });
-      image = screenContext.readForProvider(requestId);
+      image = requestScreenContext.readForProvider(requestId);
       if (!image) throw new ScreenContextError("attachment-expired", "The screen capture expired before it could be sent. Try again.");
     }
 
     if (activeSubmission?.requestId === requestId) activeSubmission.phase = "transmitting";
+    if (pendingOverlayRecreation) recreateOverlayWindowForContentProtection();
     let response;
     if (request.provider === "demo") {
       const milliseconds = Number.isFinite(testInferenceDelay) && testInferenceDelay >= 0
@@ -174,7 +180,7 @@ async function runConversationInference({ requestId, createConversation, persist
   } catch (error) {
     if (error?.name === "AbortError") {
       if (activeSubmission?.requestId === requestId && activeSubmission.phase === "capturing") {
-        screenContext?.clear(requestId);
+        requestScreenContext?.clear(requestId);
         dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
       }
       return;
@@ -188,6 +194,7 @@ async function runConversationInference({ requestId, createConversation, persist
   } finally {
     if (activeSubmission?.requestId === requestId) activeSubmission = null;
     if (activeInference === inference) activeInference = null;
+    if (pendingOverlayRecreation) recreateOverlayWindowForContentProtection();
   }
 }
 
@@ -324,15 +331,19 @@ function screenFailureStatus(error) {
 async function setScreenContextEnabled(enabled) {
   const next = await store.update({ screenContextEnabled: Boolean(enabled) });
   preferences = next;
-  dispatchOverlay({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: preferences.screenContextEnabled }, { animate: false });
+  applyScreenContextPreference(preferences.screenContextEnabled);
+  sendSettingsModel();
+  return structuredClone(overlayState);
+}
+
+function applyScreenContextPreference(enabled) {
+  dispatchOverlay({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: Boolean(enabled) }, { animate: false });
   if (!enabled && activeSubmission?.phase === "capturing") {
     activeInference?.abort();
     screenContext?.clear(activeSubmission.requestId);
     dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
     dispatchOverlay({ type: "FAIL", requestId: activeSubmission.requestId, error: "Screen context was turned off before capture completed." });
   }
-  sendSettingsModel();
-  return structuredClone(overlayState);
 }
 
 function queueBoundsWrite() {
@@ -392,24 +403,35 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
   });
   overlayWindow.loadURL(rendererTarget("overlay"));
   const captureFixture = isTest && process.env.CLARITY_TEST_SCREEN_CONTEXT === "1"
-    ? async ({ targetDisplayId }) => ({
-        bytes: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
-        mediaType: "image/png",
-        width: 1,
-        height: 1,
-        displayId: targetDisplayId
-      })
+    ? async ({ targetDisplayId }) => {
+        if (Number.isFinite(testScreenCaptureDelay) && testScreenCaptureDelay > 0) await delay(testScreenCaptureDelay);
+        return {
+          bytes: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+          mediaType: "image/png",
+          width: 1,
+          height: 1,
+          displayId: targetDisplayId
+        };
+      }
     : null;
-  screenContext = new ScreenContextService({ desktopCapturer, screen, systemPreferences, overlayWindow, captureFixture });
-  overlayWindow.webContents.on("render-process-gone", () => {
+  const createdWindow = overlayWindow;
+  if (screenContext) screenContext.setOverlayWindow(createdWindow);
+  else screenContext = new ScreenContextService({ desktopCapturer, screen, systemPreferences, overlayWindow: createdWindow, captureFixture });
+  createdWindow.webContents.on("render-process-gone", () => {
+    if (overlayWindow !== createdWindow) return;
     screenContext?.clear();
     overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+    sendOverlayState();
   });
-  overlayWindow.webContents.on("did-start-loading", () => {
-    screenContext?.clear();
-    overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+  createdWindow.webContents.once("did-finish-load", () => {
+    if (overlayWindow === createdWindow) sendOverlayState();
+    createdWindow.webContents.on("did-start-loading", () => {
+      if (overlayWindow !== createdWindow) return;
+      screenContext?.clear();
+      overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+      sendOverlayState();
+    });
   });
-  overlayWindow.webContents.once("did-finish-load", () => sendOverlayState());
   if (showWhenReady) {
     const restoredWindow = overlayWindow;
     restoredWindow.once("ready-to-show", () => {
@@ -420,12 +442,17 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
 
 function recreateOverlayWindowForContentProtection() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  if (activeSubmission?.phase === "capturing") {
+    pendingOverlayRecreation = true;
+    return;
+  }
+  pendingOverlayRecreation = false;
   const previousWindow = overlayWindow;
   const initialBounds = previousWindow.getBounds();
   const showWhenReady = previousWindow.isVisible() && overlayState.phase !== "hidden";
   previousWindow.removeAllListeners("close");
-  previousWindow.destroy();
   if (overlayWindow === previousWindow) overlayWindow = null;
+  previousWindow.destroy();
   createOverlayWindow({ initialBounds, showWhenReady });
 }
 
@@ -554,20 +581,14 @@ function registerIpc() {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
       const requested = Boolean(preferences.protectOverlayContent);
       const applied = applyOverlayContentProtection();
-      if (Object.hasOwn(safePatch, "protectOverlayContent") && applied !== requested) {
+      if (Object.hasOwn(safePatch, "protectOverlayContent") && (applied !== requested || forceTestOverlayRecreation)) {
         // Some macOS releases keep NSWindowSharingNone sticky on an existing window.
         // Rebuilding only the overlay applies the requested state without losing UI state or geometry.
         recreateOverlayWindowForContentProtection();
       }
     }
     if (Object.hasOwn(safePatch, "screenContextEnabled")) {
-      dispatchOverlay({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: preferences.screenContextEnabled }, { animate: false });
-      if (!preferences.screenContextEnabled && activeSubmission?.phase === "capturing") {
-        activeInference?.abort();
-        screenContext?.clear(activeSubmission.requestId);
-        dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
-        dispatchOverlay({ type: "FAIL", requestId: activeSubmission.requestId, error: "Screen context was turned off before capture completed." });
-      }
+      applyScreenContextPreference(preferences.screenContextEnabled);
     }
     if (Object.hasOwn(safePatch, "provider") || Object.hasOwn(safePatch, "model") || Object.hasOwn(safePatch, "imageInputOverrides")) publishScreenCapability();
     sendSettingsModel();
@@ -611,7 +632,8 @@ function registerIpc() {
       bounds: overlayWindow?.getBounds(),
       settings: getSettingsModel(),
       contentProtected: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isContentProtected()),
-      resizable: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isResizable())
+      resizable: Boolean(overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isResizable()),
+      windowId: overlayWindow?.id ?? null
     }));
     ipcMain.handle("test:set-bounds", (_event, bounds) => {
       const current = overlayWindow.getBounds();
