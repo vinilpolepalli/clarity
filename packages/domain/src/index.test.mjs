@@ -29,6 +29,12 @@ describe("portable contracts", () => {
     expect(mergePreferences({ reduceMotion: true }).keybindings.toggleOverlay).toContain("Shift");
   });
 
+  it("normalizes saved custom provider models", () => {
+    const preferences = mergePreferences({ customModels: { nvidia: [" custom/model ", "custom/model", ""] } });
+    expect(preferences.customModels.nvidia).toEqual(["custom/model"]);
+    expect(preferences.customModels.openai).toEqual([]);
+  });
+
   it("provides a deterministic offline response", () => {
     expect(demoResponse("What is next?")).toContain("focused sequence");
   });

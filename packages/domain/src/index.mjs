@@ -24,6 +24,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   captureSystemAudio: true,
   provider: "demo",
   model: "clarity-demo",
+  customModels: { nvidia: [], openai: [], anthropic: [] },
   mode: "meeting",
   selectedSettingsTab: "general",
   cloudEnabled: false,
@@ -88,12 +89,20 @@ export function mergePreferences(value) {
   const candidate = value && typeof value === "object" ? value : {};
   const keybindings = candidate.keybindings && typeof candidate.keybindings === "object" ? candidate.keybindings : {};
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
+  const customModels = candidate.customModels && typeof candidate.customModels === "object" ? candidate.customModels : {};
   return {
     ...DEFAULT_PREFERENCES,
     ...candidate,
     version: 1,
     keybindings: { ...DEFAULT_PREFERENCES.keybindings, ...keybindings },
-    integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations }
+    integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations },
+    customModels: Object.fromEntries(Object.keys(DEFAULT_PREFERENCES.customModels).map((provider) => {
+      const values = Array.isArray(customModels[provider]) ? customModels[provider] : [];
+      const normalized = [...new Set(values.map((value) => String(value).trim()).filter(Boolean))]
+        .filter((value) => value.length <= 160)
+        .slice(0, 20);
+      return [provider, normalized];
+    }))
   };
 }
 

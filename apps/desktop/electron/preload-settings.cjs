@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("claritySettings", Object.freeze({
   requestPermission: (capability) => ipcRenderer.invoke("settings:request-permission", capability),
   saveProviderKey: (provider, key) => ipcRenderer.invoke("settings:save-provider-key", { provider, key }),
   deleteProviderKey: (provider) => ipcRenderer.invoke("settings:delete-provider-key", provider),
+  listProviderModels: () => ipcRenderer.invoke("settings:list-provider-models"),
+  testProviderConnection: () => ipcRenderer.invoke("settings:test-provider-connection"),
   openExternal: (target) => ipcRenderer.invoke("settings:open-external", target),
   onModel: (listener) => {
     const handler = (_event, model) => listener(model);

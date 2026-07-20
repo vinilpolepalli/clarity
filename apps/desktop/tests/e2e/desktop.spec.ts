@@ -60,6 +60,27 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     expect(afterSettings.bounds).toMatchObject(resized);
     await expect(settings).toHaveScreenshot("settings-general.png");
 
+    await settings.getByRole("button", { name: "Models" }).click();
+    await expect(settings.getByRole("heading", { name: "Models" })).toBeVisible();
+    await settings.getByRole("combobox", { name: "Provider" }).selectOption("nvidia");
+    const modelPicker = settings.getByRole("combobox", { name: "Model" });
+    const preferredModels = await modelPicker.locator("option").allTextContents();
+    expect(preferredModels.slice(0, 5)).toEqual([
+      "DeepSeek V4 Flash · #1 Recommended · Best balance",
+      "GPT OSS 20B · #2 Fastest · Reasoning",
+      "GLM 5.2 · #3 Best quality · Slower",
+      "Nemotron 3 Nano 30B · #4 Fast · NVIDIA",
+      "Llama 3.1 8B Instruct · #5 Lightweight · Fast"
+    ]);
+    await expect(settings.getByRole("button", { name: "Refresh" })).toBeDisabled();
+    await expect(settings.getByRole("button", { name: "Test connection" })).toBeDisabled();
+    await settings.getByRole("textbox", { name: "Custom model ID" }).fill("custom/meeting-model");
+    await settings.getByRole("button", { name: "Add custom model" }).click();
+    await expect(modelPicker).toHaveValue("custom/meeting-model");
+    await expect(settings.getByText("Added custom/meeting-model and selected it.")).toBeVisible();
+    await settings.getByRole("button", { name: "Remove custom/meeting-model" }).click();
+    await expect(modelPicker).toHaveValue("deepseek-ai/deepseek-v4-flash");
+
     await settings.getByRole("button", { name: "Privacy" }).click();
     await expect(settings.getByRole("heading", { name: "Privacy" })).toBeVisible();
     await expect(settings.getByText("No desktop app can guarantee invisibility.")).toBeVisible();
