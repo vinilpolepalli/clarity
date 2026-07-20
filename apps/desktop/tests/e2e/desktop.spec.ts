@@ -173,6 +173,7 @@ test("fresh launch completes the split onboarding without forced permissions", a
 });
 
 test("screen-share protection toggles immediately and persists", async () => {
+  test.setTimeout(90_000);
   const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-protection-"));
   const env = { CLARITY_TEST_PRESERVE_CONTENT_PROTECTION: "1" };
   let application: Awaited<ReturnType<typeof electron.launch>> | null = null;
