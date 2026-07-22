@@ -173,6 +173,28 @@ test("demo history materializes into a conversation that accepts follow-ups", as
   }
 });
 
+test("assistant responses render Markdown and lead code answers with a formatted code block", async () => {
+  test.setTimeout(60_000);
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("button", { name: "Expand" }).click();
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Show a code example in Markdown");
+    await overlay.getByRole("button", { name: "Send" }).click();
+
+    const response = overlay.locator(".assistant-turn").last().locator(".markdown-response");
+    await expect(response.locator(".markdown-code-block")).toBeVisible();
+    await expect(response.locator(".markdown-code-block")).toHaveAttribute("data-language", "ts");
+    await expect(response.locator(".markdown-code-block code")).toContainText('status: "ready to verify"');
+    await expect(response.locator(".markdown-heading")).toHaveText("Verify the handoff");
+    await expect(response.getByRole("link", { name: "Read the local-first guide" })).toHaveAttribute("href", "https://example.com/local-first");
+    await expect(response.locator(":scope > :first-child")).toHaveClass(/markdown-code-block/);
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
 test("fresh launch completes the split onboarding without forced permissions", async () => {
   const { application, userData } = await launch({ CLARITY_TEST_ONBOARDING: "1" });
   try {
