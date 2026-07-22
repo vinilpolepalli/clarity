@@ -27,6 +27,27 @@ async function pageByTitle(application: Awaited<ReturnType<typeof electron.launc
   throw new Error(`No open Electron page has the title ${title}`);
 }
 
+test("reduce transparency keeps the native overlay transparent", async () => {
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    expect((await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlayBackgroundColor).toBe("#000000");
+
+    await overlay.getByRole("button", { name: "Settings" }).click();
+    const settings = await pageByTitle(application, "Clarity");
+    await settings.getByRole("switch", { name: "Reduce transparency" }).click();
+
+    await expect.poll(() => overlay.evaluate(() => document.body.dataset.reduceTransparency)).toBe("true");
+    const after = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(after.settings.preferences.reduceTransparency).toBe(true);
+    expect(after.overlayBackgroundColor).toBe("#000000");
+    await expect(overlay).toHaveScreenshot("overlay-reduced-transparency.png");
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
 test("overlay preserves its anchor, reflows, and keeps settings separate", async () => {
   test.setTimeout(60_000);
   const { application, userData } = await launch({ CLARITY_TEST_INFERENCE_DELAY: "1500" });

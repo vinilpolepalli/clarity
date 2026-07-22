@@ -257,6 +257,15 @@ function OverlayApp() {
   }, []);
 
   useEffect(() => {
+    const applyAppearance = ({ reduceTransparency }: { reduceTransparency: boolean }) => {
+      document.body.dataset.reduceTransparency = String(reduceTransparency);
+    };
+    const removeAppearanceListener = window.clarityOverlay.onAppearance(applyAppearance);
+    window.clarityOverlay.getAppearance().then(applyAppearance);
+    return removeAppearanceListener;
+  }, []);
+
+  useEffect(() => {
     if (!state?.startedAt) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
