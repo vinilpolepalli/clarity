@@ -353,6 +353,9 @@ export function demoResponse(prompt, mode = {}) {
   const modeLabel = String(mode.label ?? "General");
   const modeFocus = String(mode.behaviorSummary ?? "Direct, concise assistance.");
   if (/error/i.test(compact)) throw new Error("The local demo provider intentionally failed. Your data stayed on this Mac.");
+  if (/markdown|code example|code snippet/i.test(compact)) {
+    return `\`\`\`ts\nconst nextStep = (owner: string) => ({\n  owner,\n  status: "ready to verify"\n});\n\`\`\`\n\n### Verify the handoff\n\nUse \`nextStep\` to record the owner before moving to the release gate.\n\n- Confirm the expected outcome\n- Attach the evidence\n- [Read the local-first guide](https://example.com/local-first)`;
+  }
   if (/sequence|plan|next/i.test(compact)) {
     return `${modeLabel} mode · ${modeFocus}\n\nHere’s a focused sequence:\n\n• Confirm the outcome and the release gate\n• Capture decisions with a clear owner\n• Finish the smallest testable slice first\n• Verify failure recovery before adding integrations\n• Record the result and attach evidence`;
   }
