@@ -19,7 +19,7 @@ function fakeWindow() {
     isFocused: () => false,
     isAlwaysOnTop: () => true,
     getBounds: () => ({ x: 10, y: 10, width: 500, height: 100 }),
-    hide: () => queueMicrotask(() => window.emit("hide")),
+    hide: vi.fn(() => queueMicrotask(() => window.emit("hide"))),
     setBounds: vi.fn(),
     setAlwaysOnTop: vi.fn(),
     showInactive: vi.fn(),
@@ -47,7 +47,7 @@ function service({ permission = "granted", sources } = {}) {
 }
 
 describe("ScreenContextService", () => {
-  it("captures the frozen display and exposes bytes only to the owning request", async () => {
+  it("captures the current display without hiding the overlay and exposes bytes only to the owning request", async () => {
     const { instance, overlayWindow } = service();
     const metadata = await instance.capture("request-1", { targetDisplayId: 2 });
     expect(metadata.displayId).toBe("2");
@@ -55,7 +55,8 @@ describe("ScreenContextService", () => {
     expect(instance.readForProvider("other")).toBeNull();
     expect(instance.readForProvider("request-1").base64).toBeTruthy();
     expect(instance.getPreview(metadata.id).bytes).toBeInstanceOf(Uint8Array);
-    expect(overlayWindow.showInactive).toHaveBeenCalled();
+    expect(overlayWindow.hide).not.toHaveBeenCalled();
+    expect(overlayWindow.showInactive).not.toHaveBeenCalled();
   });
 
   it("accepts a real capture when macOS reports a stale denied status", async () => {
@@ -97,16 +98,21 @@ describe("ScreenContextService", () => {
     expect(instance.hasVerifiedScreenAccess()).toBe(true);
   });
 
-  it("clears and restores the overlay when the capture source is unavailable or empty", async () => {
+  it("keeps the overlay visible when the capture source is unavailable or empty", async () => {
     const unavailable = service({ sources: [] });
     await expect(unavailable.instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "source-unavailable" });
     expect(unavailable.instance.metadata()).toBeNull();
-    expect(unavailable.overlayWindow.showInactive).toHaveBeenCalled();
+    expect(unavailable.overlayWindow.hide).not.toHaveBeenCalled();
 
     const empty = service({ sources: [{ display_id: "2", thumbnail: { isEmpty: () => true } }] });
     await expect(empty.instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "empty-capture" });
     expect(empty.instance.metadata()).toBeNull();
-    expect(empty.overlayWindow.showInactive).toHaveBeenCalled();
+    expect(empty.overlayWindow.hide).not.toHaveBeenCalled();
+  });
+
+  it("uses the only non-empty source when Electron omits its display identifier", async () => {
+    const { instance } = service({ sources: [{ display_id: "", thumbnail: fakeImage() }] });
+    await expect(instance.capture("request-1", { targetDisplayId: 2 })).resolves.toMatchObject({ displayId: "2" });
   });
 
   it("rejects an oversized capture after exhausting resize attempts", async () => {

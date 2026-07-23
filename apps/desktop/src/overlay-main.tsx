@@ -126,6 +126,33 @@ function ViewedScreen({ state }: { state: OverlayState }) {
 }
 
 function ConversationTurn({ message, state, isLatestAssistant, retry }: { message: ConversationMessage; state: OverlayState; isLatestAssistant: boolean; retry: () => void }) {
+  const [waitingForScreenPermission, setWaitingForScreenPermission] = useState(false);
+  const permissionPoll = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (permissionPoll.current !== null) window.clearInterval(permissionPoll.current);
+  }, []);
+
+  async function openScreenPermissionSettings() {
+    if (waitingForScreenPermission) return;
+    await window.clarityOverlay.openScreenPermissionSettings();
+    setWaitingForScreenPermission(true);
+    const startedAt = Date.now();
+    permissionPoll.current = window.setInterval(async () => {
+      const permission = await window.clarityOverlay.recheckScreenPermission();
+      if (permission === "granted") {
+        if (permissionPoll.current !== null) window.clearInterval(permissionPoll.current);
+        permissionPoll.current = null;
+        setWaitingForScreenPermission(false);
+        retry();
+      } else if (Date.now() - startedAt > 45_000) {
+        if (permissionPoll.current !== null) window.clearInterval(permissionPoll.current);
+        permissionPoll.current = null;
+        setWaitingForScreenPermission(false);
+      }
+    }, 700);
+  }
+
   if (message.role === "user") return <div className="chat-turn user-turn"><div className="user-bubble">{message.content}</div></div>;
   const streamingEmpty = message.status === "streaming" && !message.content;
   const viewedCurrentScreen = isLatestAssistant && Boolean(state.screenContext.attachmentId);
@@ -139,7 +166,7 @@ function ConversationTurn({ message, state, isLatestAssistant, retry }: { messag
       {message.status === "error" && (
         <div className="turn-error">
           <p>{state.error ?? "Clarity couldn’t finish that response."}</p>
-          {state.screenContext.status === "permission-blocked" && ["permission-denied", "permission-not-granted"].includes(state.screenContext.errorCode ?? "") && <button className="secondary-button" type="button" onClick={() => void window.clarityOverlay.openScreenPermissionSettings()}>Open Screen Recording Settings</button>}
+          {state.screenContext.status === "permission-blocked" && ["permission-denied", "permission-not-granted"].includes(state.screenContext.errorCode ?? "") && <button className="secondary-button" type="button" disabled={waitingForScreenPermission} onClick={() => void openScreenPermissionSettings()}>{waitingForScreenPermission ? "Waiting for macOS…" : "Open Screen Recording Settings"}</button>}
           {state.screenContext.status === "permission-blocked" && <button className="secondary-button" type="button" onClick={async () => {
             const permission = await window.clarityOverlay.recheckScreenPermission();
             if (permission === "granted") retry();

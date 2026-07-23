@@ -28,21 +28,6 @@ function thumbnailSize(displaySize, longEdge = MAX_LONG_EDGE) {
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
-function waitForEvent(target, eventName, timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      target.removeListener?.(eventName, done);
-      resolve();
-    };
-    const timer = setTimeout(done, timeoutMs);
-    target.once(eventName, done);
-  });
-}
-
 export class ScreenContextService {
   constructor({ desktopCapturer, screen, systemPreferences, overlayWindow, platform = process.platform, settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), captureFixture = null }) {
     this.desktopCapturer = desktopCapturer;
@@ -143,26 +128,24 @@ export class ScreenContextService {
       throw new ScreenContextError("display-changed", "The target display changed before Clarity could capture it. Try again.");
     }
 
-    const window = this.overlayWindow;
-    const wasVisible = Boolean(window && !window.isDestroyed() && window.isVisible());
-    const wasFocused = Boolean(wasVisible && window.isFocused());
-    const previousBounds = wasVisible ? window.getBounds() : null;
-    const wasAlwaysOnTop = wasVisible ? window.isAlwaysOnTop() : false;
-
     try {
-      if (wasVisible) {
-        const hidden = waitForEvent(window, "hide", 250);
-        window.hide();
-        await hidden;
-        await this.settle(100);
-      }
+      // Keep the overlay in place. Hiding it produced a distracting flash and
+      // could make a full-display source disappear during the capture handoff.
+      // The overlay is already content-protected by default; on macOS releases
+      // that honor that boundary it is omitted from the source automatically.
       throwIfAborted(signal);
       display = this.screen.getAllDisplays().find((candidate) => String(candidate.id) === targetId);
       if (!display) throw new ScreenContextError("display-changed", "The target display changed before Clarity could capture it. Try again.");
       const sources = await this.desktopCapturer.getSources({ types: ["screen"], thumbnailSize: thumbnailSize(display.size) });
       throwIfAborted(signal);
       let source = sources.find((candidate) => String(candidate.display_id) === targetId);
-      if (!source && sources.length === 1) source = sources[0];
+      // Some macOS/Electron combinations return an empty or stale display_id
+      // even though the captured screen is valid. A usable single source is a
+      // safer fallback than failing the entire question after the user opted in.
+      if (!source) {
+        const usableSources = sources.filter((candidate) => candidate.thumbnail && !candidate.thumbnail.isEmpty());
+        if (usableSources.length === 1) source = usableSources[0];
+      }
       if (!source) {
         if (permission === "denied" || permission === "not-determined") throw new ScreenContextError("permission-denied", "Screen Recording is off for this copy of Clarity. Enable it in System Settings, then try again.", permission);
         throw new ScreenContextError("source-unavailable", "Clarity could not find the target display. Try again.");
@@ -190,7 +173,7 @@ export class ScreenContextService {
         mediaType: "image/png",
         bytes: Buffer.from(bytes),
         capturedAt: Date.now(),
-        displayId: targetId,
+        displayId: String(source.display_id || targetId),
         width: size.width,
         height: size.height
       };
@@ -198,18 +181,10 @@ export class ScreenContextService {
       return this.metadata();
     } catch (error) {
       if (this.ownerRequestId === requestId) this.clear(requestId);
-      throw error;
-    } finally {
-      if (wasVisible && window && !window.isDestroyed()) {
-        if (previousBounds) window.setBounds(previousBounds, false);
-        window.setAlwaysOnTop(wasAlwaysOnTop, "screen-saver", 1);
-        if (wasFocused) {
-          window.show();
-          window.focus();
-        } else {
-          window.showInactive();
-        }
+      if (!(error instanceof ScreenContextError) && (permission === "denied" || permission === "not-determined")) {
+        throw new ScreenContextError("permission-denied", "Screen Recording is not available to this copy of Clarity. Open System Settings, confirm Clarity is enabled, then reopen Clarity.", permission);
       }
+      throw error;
     }
   }
 }
