@@ -1,10 +1,13 @@
 import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   globalShortcut,
   ipcMain,
   Menu,
@@ -34,16 +37,23 @@ import {
 } from "@clarity/windowing";
 import {
   curatedModels,
+  imageInputCapability,
   listModels,
+  providerDefinition,
+  providerEndpointIdentity,
   ProviderError,
   serializeProviderError,
   streamProviderResponse,
   testConnection
 } from "@clarity/providers";
 import { NativeCaptureClient, RollingAudioBuffer } from "@clarity/capture-client";
+import { ResourceGovernor } from "@clarity/ai-core";
 import { PreferenceStore } from "./persistence.mjs";
 import { deleteProviderKey, hasProviderKey, readProviderKey, saveProviderKey } from "./keychain.mjs";
 import { StorageService } from "./storage-service.mjs";
+import { MeetingProcessingService } from "./meeting-service.mjs";
+import { parseMeetingArtifact, validateMeetingArtifact } from "./meeting-artifact.mjs";
+import { ScreenContextError, ScreenContextService } from "./screen-context.mjs";
 
 const APP_ROOT = join(import.meta.dirname, "..");
 const isDemo = process.env.CLARITY_DEMO === "1" || process.argv.includes("--demo");
@@ -53,6 +63,8 @@ const SETTINGS_TABS = new Set(["general", "models", "audio", "modes", "keybindin
 const preserveTestContentProtection = process.env.CLARITY_TEST_PRESERVE_CONTENT_PROTECTION === "1";
 const forceTestOverlayRecreation = isTest && process.env.CLARITY_TEST_FORCE_OVERLAY_RECREATION === "1";
 const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
+const testScreenCaptureDelay = isTest ? Number(process.env.CLARITY_TEST_SCREEN_CAPTURE_DELAY) : Number.NaN;
+const execFileAsync = promisify(execFile);
 
 app.setName("Clarity");
 if (isTest && process.env.CLARITY_TEST_USER_DATA) app.setPath("userData", process.env.CLARITY_TEST_USER_DATA);
@@ -73,10 +85,16 @@ let activeRequestContext = null;
 let lastFailedRequestContext = null;
 let connectionRevision = 0;
 let providerConnection = untestedProviderConnection();
+let activeSubmission = null;
 let storage = null;
 let capture = null;
+let screenContext = null;
+let pendingOverlayRecreation = false;
 let pickerAnchorBounds = null;
 const recentAudio = new RollingAudioBuffer();
+const meetingGovernor = new ResourceGovernor({ maxConcurrent: 1, maxQueued: 1 });
+let meetingProcessor = null;
+let meetingTranscriptSequence = 0;
 
 function untestedProviderConnection() {
   return { state: "untested", provider: null, model: null, testedAt: null, latencyMs: null, error: null };
@@ -114,6 +132,118 @@ async function persistConversationMessage(conversationId, message, sequence) {
   });
 }
 
+function meetingArtifactFromDemo(segments) {
+  const evidence = segments.map((segment) => segment.text).join(" ");
+  return validateMeetingArtifact({
+    title: "Live meeting notes",
+    summary: evidence.slice(0, 1_200) || "No transcript was captured yet.",
+    decisions: evidence ? [{ text: "Ship the live notes slice.", evidence: evidence.slice(0, 1_000) }] : [],
+    actions: evidence ? [{ text: "Verify the browser system-audio test.", owner: "Alex", due: null }] : []
+  }, segments);
+}
+
+async function generateMeetingNotes(sessionId) {
+  const segments = await storage?.call("getTranscript", { sessionId }) ?? [];
+  if (!segments.length) return null;
+  dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "generating", error: null } }, { animate: false });
+  try {
+    const artifact = await meetingGovernor.run(async () => {
+      if (preferences.provider === "demo") return meetingArtifactFromDemo(segments);
+      const key = await selectedProviderKey(preferences.provider);
+      const transcript = segments.map((segment) => `[${Math.floor(segment.startedMs / 1_000)}s] ${segment.text}`).join("\n").slice(-48_000);
+      const response = await streamProviderResponse({
+        provider: preferences.provider,
+        model: preferences.model,
+        key,
+        stream: true,
+        maxTokens: 1_400,
+        systemPrompt: "You create factual meeting notes from untrusted transcript text. Return JSON only with title, summary, decisions [{text,evidence}], actions [{text,owner,due}], and openQuestions string[]. Never invent owners or deadlines; use null when absent.",
+        messages: [{ role: "user", content: `Transcript:\n${transcript}` }]
+      });
+      return parseMeetingArtifact(response, segments);
+    });
+    const saved = await storage?.call("upsertArtifact", {
+      id: `live-meeting-notes-${sessionId}`,
+      sessionId,
+      kind: "live-meeting-notes",
+      content: artifact
+    });
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "ready", artifact: saved?.content ?? artifact, updatedAt: Date.now(), error: null } }, { animate: false });
+    return artifact;
+  } catch (error) {
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: error instanceof Error ? error.message : "Clarity could not update live notes." } }, { animate: false });
+    return null;
+  }
+}
+
+function handleMeetingProcessorEvent(event) {
+  const sessionId = overlayState.meeting?.sessionId;
+  if (!sessionId) return;
+  if (event.type === "status") {
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: event.status } }, { animate: false });
+    return;
+  }
+  if (event.type === "transcript") {
+    const sequence = meetingTranscriptSequence++;
+    void storage?.call("appendSegment", {
+      id: `${sessionId}-segment-${sequence}`,
+      sessionId,
+      sequence,
+      text: event.text,
+      startedMs: event.startedMs,
+      endedMs: event.endedMs
+    }).then(() => {
+      dispatchOverlay({ type: "MEETING_STATUS", meeting: { transcriptCount: sequence + 1, status: "transcribing" } }, { animate: false });
+      return generateMeetingNotes(sessionId);
+    }).catch((error) => dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: error.message } }, { animate: false }));
+    return;
+  }
+  if (event.type === "failure") {
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: event.message } }, { animate: false });
+    return;
+  }
+  if (event.type === "stopped") {
+    void generateMeetingNotes(sessionId).then((artifact) => {
+      if (!artifact && overlayState.meeting.status !== "error") {
+        dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "ready", updatedAt: Date.now() } }, { animate: false });
+      }
+    }).finally(() => {
+      void storage?.call("completeMeetingSession", { sessionId });
+      meetingProcessor?.close();
+      meetingProcessor = null;
+    });
+  }
+}
+
+function startMeetingProcessor(meeting) {
+  meetingTranscriptSequence = 0;
+  meetingProcessor?.close();
+  meetingProcessor = new MeetingProcessingService({ onEvent: handleMeetingProcessorEvent });
+  meetingProcessor.start({
+    sessionId: meeting.sessionId,
+    source: meeting.source,
+    whisperExecutable: preferences.whisperExecutable,
+    whisperModelPath: preferences.whisperModelPath
+  });
+}
+
+async function preflightMeetingNotes() {
+  if (isTest) return null;
+  if (!preferences.whisperModelPath || !existsSync(preferences.whisperModelPath)) {
+    return "Choose an existing local Whisper model file in Audio settings before starting live notes.";
+  }
+  if (preferences.provider === "demo" || !keyConfigured[preferences.provider]) {
+    return "Choose a BYOK generation provider and save its API key before starting live notes.";
+  }
+  try {
+    await execFileAsync(preferences.whisperExecutable, ["--help"], { timeout: 5_000, maxBuffer: 256 * 1_024 });
+  } catch (error) {
+    if (error?.code === "ENOENT") return "Choose a working local Whisper executable in Audio settings before starting live notes.";
+    if (error?.code === "EACCES") return "The configured Whisper executable is not permitted to run.";
+  }
+  return null;
+}
+
 function delay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(resolve, milliseconds);
@@ -136,11 +266,20 @@ async function runConversationInference({ context, createConversation, persistUs
     .filter((item) => (item.role === "user" || item.role === "assistant") && item.content && item.status !== "error")
     .map(({ role, content }) => ({ role, content }));
   const selectedMode = resolveMode(context.modeId);
+  const requestScreenContext = screenContext;
+  const targetDisplayId = String(screen.getDisplayMatching(overlayWindow.getBounds()).id);
   const request = {
     requestId,
     provider: preferences.provider,
-    model: preferences.model
+    model: preferences.model,
+    imageCapability: currentImageInput().capability,
+    screenContextEnabled: Boolean(preferences.screenContextEnabled),
+    targetDisplayId
   };
+  activeSubmission = { requestId, phase: request.screenContextEnabled ? "capturing" : "transmitting" };
+  screenContext?.clear();
+  dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
+  dispatchOverlay({ type: "SET_SCREEN_CAPABILITY", capability: request.imageCapability }, { animate: false });
 
   try {
     if (createConversation) {
@@ -153,6 +292,30 @@ async function runConversationInference({ context, createConversation, persistUs
     }
     if (persistUser && userMessage) await persistConversationMessage(conversationId, userMessage, userIndex);
 
+    let image;
+    if (request.screenContextEnabled) {
+      if (request.imageCapability !== "supported") {
+        const unknown = request.imageCapability === "unknown";
+        const message = unknown
+          ? "Confirm that this exact model accepts image inputs in Models settings before using screen context."
+          : "The selected model does not accept image inputs. Choose a vision model or turn off Uses screen.";
+        dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: "unsupported", errorCode: unknown ? "capability-unknown" : "model-unsupported", error: message }, { animate: false });
+        dispatchOverlay({ type: "FAIL", requestId, error: message });
+        lastFailedRequestContext = { ...context, controller: null };
+        activeRequestContext = null;
+        return;
+      }
+      dispatchOverlay({ type: "SCREEN_CAPTURE_STARTED", requestId }, { animate: false });
+      if (!requestScreenContext) throw new ScreenContextError("capture-unavailable", "Screen capture is not available yet. Try again.");
+      const metadata = await requestScreenContext.capture(requestId, request, { signal: context.controller.signal });
+      if (overlayState.requestId !== requestId) return;
+      dispatchOverlay({ type: "SCREEN_CAPTURE_ATTACHED", requestId, attachmentId: metadata.id, capturedAt: metadata.capturedAt, displayId: metadata.displayId }, { animate: false });
+      image = requestScreenContext.readForProvider(requestId);
+      if (!image) throw new ScreenContextError("attachment-expired", "The screen capture expired before it could be sent. Try again.");
+    }
+
+    if (activeSubmission?.requestId === requestId) activeSubmission.phase = "transmitting";
+    if (pendingOverlayRecreation) recreateOverlayWindowForContentProtection();
     let response;
     if (request.provider === "demo") {
       const milliseconds = Number.isFinite(testInferenceDelay) && testInferenceDelay >= 0
@@ -168,6 +331,7 @@ async function runConversationInference({ context, createConversation, persistUs
         messages: providerMessages,
         systemPrompt: context.systemPrompt,
         key,
+        image,
         signal: context.controller.signal,
         onToken: (_token, accumulated) => {
           if (activeRequestContext?.requestId === requestId) {
@@ -184,14 +348,26 @@ async function runConversationInference({ context, createConversation, persistUs
     lastFailedRequestContext = null;
   } catch (error) {
     if (error?.name === "AbortError") {
+      if (activeSubmission?.requestId === requestId && activeSubmission.phase === "capturing") {
+        requestScreenContext?.clear(requestId);
+        dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
+      }
       if (activeRequestContext?.requestId === requestId) activeRequestContext = null;
       return;
     }
     if (activeRequestContext?.requestId === requestId) {
+      if (error instanceof ScreenContextError) {
+        dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: screenFailureStatus(error), errorCode: error.code, error: error.message }, { animate: false });
+      } else if (request.screenContextEnabled && overlayState.screenContext.status === "capturing") {
+        dispatchOverlay({ type: "SCREEN_CAPTURE_FAILED", requestId, status: "error", errorCode: "capture-failed", error: "Clarity could not capture the current display. Try again." }, { animate: false });
+      }
       lastFailedRequestContext = { ...context, controller: null };
       activeRequestContext = null;
       dispatchOverlay({ type: "FAIL", requestId, error: error instanceof Error ? error.message : "Clarity could not finish that response." });
     }
+  } finally {
+    if (activeSubmission?.requestId === requestId) activeSubmission = null;
+    if (pendingOverlayRecreation) recreateOverlayWindowForContentProtection();
   }
 }
 
@@ -207,20 +383,30 @@ function sendOverlayState() {
   }
 }
 
-function getOverlayAppearance() {
-  return { reduceTransparency: Boolean(preferences.reduceTransparency) };
-}
-
-function sendOverlayAppearance() {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.webContents.send("overlay:appearance", getOverlayAppearance());
-  }
-}
-
 function sendSettingsModel() {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.webContents.send("settings:model", getSettingsModel());
   }
+}
+
+function currentImageInput() {
+  const provider = preferences.provider;
+  const endpoint = provider === "demo" ? "demo://local" : providerDefinition(provider).endpoint;
+  const endpointIdentity = providerEndpointIdentity(provider, endpoint);
+  const normalizedModel = String(preferences.model ?? "").trim().toLowerCase();
+  const overrideKey = `${endpointIdentity}:${normalizedModel}`;
+  return {
+    capability: isTest && process.env.CLARITY_TEST_SCREEN_CONTEXT === "1" ? "supported" : imageInputCapability({ provider, model: preferences.model, endpoint, overrides: preferences.imageInputOverrides }),
+    endpointIdentity,
+    overrideKey,
+    explicitOverride: preferences.imageInputOverrides?.[overrideKey] ?? null
+  };
+}
+
+function publishScreenCapability() {
+  const { capability } = currentImageInput();
+  overlayState = reduceOverlay(overlayState, { type: "SET_SCREEN_CAPABILITY", capability });
+  sendOverlayState();
 }
 
 function getModeModel() {
@@ -340,6 +526,13 @@ function dispatchOverlay(event, options = {}) {
     if (!retrySource) return structuredClone(overlayState);
     effectiveEvent = { type: "RETRY", prompt: retrySource.prompt, requestId: crypto.randomUUID() };
   }
+  if (event.type === "START_LISTENING" && !event.sessionId) {
+    effectiveEvent = {
+      ...event,
+      sessionId: crypto.randomUUID(),
+      source: ["microphone", "system", "both"].includes(event.source) ? event.source : preferences.meetingAudioSource
+    };
+  }
   const previousPhase = overlayState.phase;
   const previousRequestId = overlayState.requestId;
   const previousConversationId = overlayState.conversationId;
@@ -347,18 +540,45 @@ function dispatchOverlay(event, options = {}) {
   applyOverlayPresentation(previousPhase, options.animate !== false);
   sendOverlayState();
 
-  if (effectiveEvent.type === "START_LISTENING" && capture) {
-    void capture.start({ microphone: true, systemAudio: Boolean(preferences.captureSystemAudio) }).catch((error) => {
-      dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
-      dispatchOverlay({ type: "FAIL", error: `Capture could not start: ${error.message}` });
-    });
+  if (effectiveEvent.type === "START_LISTENING") {
+    const meeting = overlayState.meeting;
+    void storage?.call("createMeetingSession", { id: meeting.sessionId, title: "Live meeting", captureSource: meeting.source })
+      .then(async () => {
+        const preflightError = await preflightMeetingNotes();
+        if (preflightError) {
+          dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: preflightError } }, { animate: false });
+          dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
+          void storage?.call("completeMeetingSession", { sessionId: meeting.sessionId });
+          return;
+        }
+        if (overlayState.meeting.sessionId !== meeting.sessionId || !overlayState.startedAt) {
+          void storage?.call("completeMeetingSession", { sessionId: meeting.sessionId });
+          return;
+        }
+        startMeetingProcessor(meeting);
+        if (capture) {
+          await capture.start({ microphone: meeting.source !== "system", systemAudio: meeting.source !== "microphone" });
+        }
+      })
+      .catch((error) => {
+        dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: `Capture could not start: ${error.message}` } }, { animate: false });
+        dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
+        void storage?.call("completeMeetingSession", { sessionId: meeting.sessionId });
+      });
   }
+  if (effectiveEvent.type === "STOP_LISTENING") meetingProcessor?.stop();
   if (effectiveEvent.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
 
   if (event.type === "CLEAR" || event.type === "LOAD_CONVERSATION") {
     activeRequestContext?.controller.abort();
     activeRequestContext = null;
     lastFailedRequestContext = null;
+    screenContext?.clear();
+    activeSubmission = null;
+    if (event.type === "LOAD_CONVERSATION") {
+      overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+      sendOverlayState();
+    }
   }
 
   if ((effectiveEvent.type === "SUBMIT" || effectiveEvent.type === "RETRY") && overlayState.requestId && overlayState.requestId !== previousRequestId) {
@@ -385,6 +605,34 @@ function dispatchOverlay(event, options = {}) {
   return structuredClone(overlayState);
 }
 
+function screenFailureStatus(error) {
+  if (error instanceof ScreenContextError && error.code.startsWith("permission-")) return "permission-blocked";
+  return "error";
+}
+
+async function setScreenContextEnabled(enabled) {
+  const next = await store.update({ screenContextEnabled: Boolean(enabled) });
+  preferences = next;
+  applyScreenContextPreference(preferences.screenContextEnabled);
+  sendSettingsModel();
+  return structuredClone(overlayState);
+}
+
+function applyScreenContextPreference(enabled) {
+  dispatchOverlay({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: Boolean(enabled) }, { animate: false });
+  if (!enabled && activeSubmission?.phase === "capturing") {
+    const requestId = activeSubmission.requestId;
+    if (activeRequestContext?.requestId === requestId) {
+      const requestContext = activeRequestContext;
+      lastFailedRequestContext = { ...requestContext, controller: null };
+      activeRequestContext = null;
+      requestContext.controller.abort();
+    }
+    screenContext?.clear(requestId);
+    dispatchOverlay({ type: "SCREEN_CAPTURE_CLEARED" }, { animate: false });
+    dispatchOverlay({ type: "FAIL", requestId, error: "Screen context was turned off before capture completed." });
+  }
+}
 
 function queueBoundsWrite() {
   if (programmaticBounds || pickerAnchorBounds || !overlayWindow || overlayWindow.isDestroyed()) return;
@@ -406,8 +654,8 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
     ...bounds,
     title: "Clarity Overlay",
     frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
+    transparent: !preferences.reduceTransparency,
+    backgroundColor: preferences.reduceTransparency ? "#111113" : "#00000000",
     show: false,
     resizable: Boolean(initialBounds && isExpandedPhase(overlayState.phase)),
     maximizable: false,
@@ -443,13 +691,38 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
     }
   });
   overlayWindow.loadURL(rendererTarget("overlay"));
+  const captureFixture = isTest && process.env.CLARITY_TEST_SCREEN_CONTEXT === "1"
+    ? async ({ targetDisplayId }) => {
+        if (Number.isFinite(testScreenCaptureDelay) && testScreenCaptureDelay > 0) await delay(testScreenCaptureDelay);
+        return {
+          bytes: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+          mediaType: "image/png",
+          width: 1,
+          height: 1,
+          displayId: targetDisplayId
+        };
+      }
+    : null;
   const createdWindow = overlayWindow;
+  if (screenContext) screenContext.setOverlayWindow(createdWindow);
+  else screenContext = new ScreenContextService({ desktopCapturer, screen, systemPreferences, overlayWindow: createdWindow, captureFixture });
+  createdWindow.webContents.on("render-process-gone", () => {
+    if (overlayWindow !== createdWindow) return;
+    screenContext?.clear();
+    overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+    sendOverlayState();
+  });
   createdWindow.webContents.once("did-finish-load", () => {
     if (overlayWindow === createdWindow) {
       sendOverlayState();
-      sendOverlayAppearance();
       sendOverlayModeModel();
     }
+    createdWindow.webContents.on("did-start-loading", () => {
+      if (overlayWindow !== createdWindow) return;
+      screenContext?.clear();
+      overlayState = reduceOverlay(overlayState, { type: "SCREEN_CAPTURE_CLEARED" });
+      sendOverlayState();
+    });
   });
   if (showWhenReady) {
     const restoredWindow = overlayWindow;
@@ -461,6 +734,11 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
 
 function recreateOverlayWindowForContentProtection() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  if (activeSubmission?.phase === "capturing") {
+    pendingOverlayRecreation = true;
+    return;
+  }
+  pendingOverlayRecreation = false;
   const previousWindow = overlayWindow;
   const initialBounds = previousWindow.getBounds();
   const showWhenReady = previousWindow.isVisible() && overlayState.phase !== "hidden";
@@ -526,15 +804,23 @@ function getSettingsModel() {
     onboarding: !preferences.onboardingComplete,
     keyConfigured: structuredClone(keyConfigured),
     defaultProviderModels: structuredClone(DEFAULT_PROVIDER_MODELS),
+    imageInput: currentImageInput(),
     providerCatalog,
     providerConnection: structuredClone(providerConnection)
   };
 }
 
+function isAuthorizedOverlaySender(event) {
+  if (!overlayWindow || overlayWindow.isDestroyed() || event.sender.id !== overlayWindow.webContents.id) return false;
+  return event.senderFrame?.url === rendererTarget("overlay");
+}
+
 function registerIpc() {
   ipcMain.handle("overlay:get-state", () => structuredClone(overlayState));
-  ipcMain.handle("overlay:get-appearance", () => getOverlayAppearance());
-  ipcMain.handle("overlay:dispatch", (_event, action) => dispatchOverlay(action));
+  ipcMain.handle("overlay:dispatch", async (_event, action) => {
+    if (action?.type === "SET_SCREEN_CONTEXT_ENABLED") return setScreenContextEnabled(action.enabled);
+    return dispatchOverlay(action);
+  });
   ipcMain.handle("overlay:get-mode-model", () => getModeModel());
   ipcMain.handle("overlay:set-mode", (_event, modeId) => setActiveMode(modeId));
   ipcMain.handle("overlay:open-mode-picker", (_event, layout) => openModePicker(layout));
@@ -562,6 +848,13 @@ function registerIpc() {
     const assembled = assembleSystemPrompt(preferences.mode);
     return storage.call("ensureConversation", { ...conversation, mode: assembled.modeId, modePromptVersion: assembled.promptVersion });
   });
+  ipcMain.handle("overlay:retry-meeting-notes", async (event) => {
+    if (!isAuthorizedOverlaySender(event)) throw new Error("Meeting notes access denied");
+    const sessionId = overlayState.meeting?.sessionId;
+    if (!sessionId) throw new Error("No active meeting notes session");
+    await generateMeetingNotes(sessionId);
+    return structuredClone(overlayState.meeting);
+  });
   ipcMain.handle("overlay:open-settings", async (_event, tab) => {
     if (tab !== undefined && !SETTINGS_TABS.has(tab)) throw new TypeError("Unknown settings tab");
     if (tab !== undefined && preferences.selectedSettingsTab !== tab) {
@@ -571,14 +864,33 @@ function registerIpc() {
     sendSettingsModel();
     return true;
   });
+  ipcMain.handle("overlay:open-model-settings", async () => {
+    preferences = await store.update({ selectedSettingsTab: "models" });
+    createSettingsWindow();
+    sendSettingsModel();
+    return true;
+  });
+  ipcMain.handle("overlay:get-screen-preview", (event, attachmentId) => {
+    if (!isAuthorizedOverlaySender(event)) throw new Error("Screen preview access denied");
+    return screenContext?.getPreview(String(attachmentId ?? "")) ?? null;
+  });
+  ipcMain.handle("overlay:open-screen-permission-settings", async (event) => {
+    if (!isAuthorizedOverlaySender(event)) throw new Error("Permission settings access denied");
+    await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+    return true;
+  });
+  ipcMain.handle("overlay:recheck-screen-permission", (event) => {
+    if (!isAuthorizedOverlaySender(event)) throw new Error("Permission status access denied");
+    return permissionStatus().screen;
+  });
 
   ipcMain.handle("settings:get-model", () => getSettingsModel());
   ipcMain.handle("settings:update", async (_event, patch) => {
     const allowed = [
       "launchAtLogin", "launchOverlayAtLogin", "reduceMotion", "reduceTransparency",
       "protectOverlayContent", "transcriptLanguage", "outputLanguage", "microphoneId",
-      "captureSystemAudio", "provider", "model", "mode", "selectedSettingsTab",
-      "cloudEnabled", "integrations", "keybindings", "customModels"
+      "captureSystemAudio", "meetingAudioSource", "whisperExecutable", "whisperModelPath", "provider", "model", "mode", "selectedSettingsTab",
+      "cloudEnabled", "integrations", "keybindings", "screenContextEnabled", "imageInputOverrides", "customModels"
     ];
     const safePatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => allowed.includes(key)));
     if (Object.hasOwn(safePatch, "mode")) safePatch.mode = assertModeId(safePatch.mode);
@@ -599,8 +911,11 @@ function registerIpc() {
         recreateOverlayWindowForContentProtection();
       }
     }
+    if (Object.hasOwn(safePatch, "screenContextEnabled")) {
+      applyScreenContextPreference(preferences.screenContextEnabled);
+    }
+    if (Object.hasOwn(safePatch, "provider") || Object.hasOwn(safePatch, "model") || Object.hasOwn(safePatch, "imageInputOverrides")) publishScreenCapability();
     sendSettingsModel();
-    if (Object.hasOwn(safePatch, "reduceTransparency")) sendOverlayAppearance();
     if (Object.hasOwn(safePatch, "mode")) sendOverlayModeModel();
     return getSettingsModel();
   });
@@ -673,7 +988,6 @@ function registerIpc() {
     ipcMain.handle("test:snapshot", () => ({
       overlay: structuredClone(overlayState),
       bounds: overlayWindow?.getBounds(),
-      overlayBackgroundColor: overlayWindow?.getBackgroundColor() ?? null,
       settings: getSettingsModel(),
       pickerOpen: Boolean(pickerAnchorBounds),
       activeRequest: activeRequestContext ? { requestId: activeRequestContext.requestId, modeId: activeRequestContext.modeId, promptVersion: activeRequestContext.promptVersion } : null,
@@ -686,6 +1000,16 @@ function registerIpc() {
       const current = overlayWindow.getBounds();
       overlayWindow.setBounds({ ...current, ...bounds }, false);
       return overlayWindow.getBounds();
+    });
+    ipcMain.handle("test:meeting-frame", (_event, frame) => {
+      if (!meetingProcessor) throw new Error("Meeting processor is not running");
+      meetingProcessor.appendFrame({
+        pcm: Buffer.from(frame?.pcm ?? []),
+        source: frame?.source ?? "system",
+        sampleRate: frame?.sampleRate ?? 16_000,
+        channels: frame?.channels ?? 1
+      });
+      return true;
     });
   }
 }
@@ -727,7 +1051,10 @@ async function boot() {
   if (existsSync(captureExecutable) && !isTest) {
     capture = new NativeCaptureClient({
       executable: captureExecutable,
-      onFrame: (frame) => recentAudio.append(frame.pcm),
+      onFrame: (frame) => {
+        recentAudio.append(frame.pcm);
+        if (overlayState.startedAt && meetingProcessor) meetingProcessor.appendFrame(frame);
+      },
       onEvent: (event) => { if (event.type === "protocol-error" || event.type === "exit") console.warn("Capture helper:", event); }
     });
     try { await capture.connect(); } catch (error) { console.warn("Native capture is unavailable:", error.message); capture = null; }
@@ -741,7 +1068,9 @@ async function boot() {
   }
   if (isTest && testOnboarding) preferences = await store.update({ onboardingComplete: false, reduceMotion: true, protectOverlayContent: false });
   const showOverlayAtBoot = Boolean(preferences.onboardingComplete && (preferences.launchOverlayAtLogin || isDemo || isTest));
-  overlayState = createInitialOverlayState(showOverlayAtBoot);
+  overlayState = createInitialOverlayState(showOverlayAtBoot, preferences.screenContextEnabled);
+  overlayState = reduceOverlay(overlayState, { type: "MEETING_STATUS", meeting: { source: preferences.meetingAudioSource } });
+  overlayState = reduceOverlay(overlayState, { type: "SET_SCREEN_CAPABILITY", capability: currentImageInput().capability });
   registerIpc();
   createOverlayWindow();
   screen.on("display-removed", () => closeModePicker({ notifyRenderer: true }));
@@ -764,7 +1093,7 @@ if (singleInstance) {
     if (overlayState.phase === "hidden") dispatchOverlay({ type: "SHOW" });
     sendSettingsModel();
   });
-  app.on("will-quit", () => { globalShortcut.unregisterAll(); storage?.close(); void capture?.close(); });
+  app.on("will-quit", () => { globalShortcut.unregisterAll(); screenContext?.dispose(); meetingProcessor?.close(); storage?.close(); void capture?.close(); });
   app.on("window-all-closed", (event) => {
     if (isTest) app.quit();
     else if (process.platform === "darwin") event?.preventDefault?.();

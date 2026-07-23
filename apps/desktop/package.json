@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@clarity/capture-client": "workspace:*",
+    "@clarity/ai-core": "workspace:*",
     "@clarity/domain": "workspace:*",
     "@clarity/providers": "workspace:*",
     "@clarity/windowing": "workspace:*",

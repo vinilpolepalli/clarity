@@ -1,4 +1,4 @@
-/** @typedef {'hidden'|'compact-idle'|'compact-listening'|'expanded-empty'|'expanded-response'|'expanded-error'|'expanded-history'} OverlayPhase */
+/** @typedef {'hidden'|'compact-idle'|'compact-listening'|'expanded-empty'|'expanded-response'|'expanded-error'|'expanded-history'|'expanded-notes'} OverlayPhase */
 
 import { isModeId } from "./modes.mjs";
 
@@ -21,7 +21,8 @@ export const OVERLAY_PHASES = Object.freeze([
   "expanded-empty",
   "expanded-response",
   "expanded-error",
-  "expanded-history"
+  "expanded-history",
+  "expanded-notes"
 ]);
 
 export const DEFAULT_PROVIDER_MODELS = Object.freeze({
@@ -43,8 +44,13 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   outputLanguage: "English",
   microphoneId: "default",
   captureSystemAudio: true,
+  meetingAudioSource: "both",
+  whisperExecutable: "whisper-cli",
+  whisperModelPath: "",
+  screenContextEnabled: false,
   provider: "demo",
   model: "clarity-demo",
+  imageInputOverrides: {},
   customModels: { nvidia: [], openai: [], anthropic: [] },
   mode: "general",
   selectedSettingsTab: "general",
@@ -84,7 +90,7 @@ export const DEMO_HISTORY = Object.freeze([
   }
 ]);
 
-export function createInitialOverlayState(visible = true) {
+export function createInitialOverlayState(visible = true, screenContextEnabled = false) {
   return {
     version: 2,
     phase: visible ? "compact-idle" : "hidden",
@@ -100,6 +106,25 @@ export function createInitialOverlayState(visible = true) {
     activeAssistantMessageId: null,
     lastPrompt: "",
     startedAt: null,
+    meeting: {
+      sessionId: null,
+      source: "both",
+      status: "idle",
+      transcriptCount: 0,
+      artifact: null,
+      updatedAt: null,
+      error: null
+    },
+    screenContext: {
+      enabled: Boolean(screenContextEnabled),
+      status: "idle",
+      capability: "unknown",
+      attachmentId: null,
+      capturedAt: null,
+      displayId: null,
+      errorCode: null,
+      error: null
+    }
   };
 }
 
@@ -126,14 +151,15 @@ export function mergePreferences(value) {
   const candidate = value && typeof value === "object" ? value : {};
   const keybindings = candidate.keybindings && typeof candidate.keybindings === "object" ? candidate.keybindings : {};
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
+  const imageInputOverrides = candidate.imageInputOverrides && typeof candidate.imageInputOverrides === "object" ? candidate.imageInputOverrides : {};
   const customModels = candidate.customModels && typeof candidate.customModels === "object" ? candidate.customModels : {};
-  const { screenContextEnabled: _legacyScreenContextEnabled, imageInputOverrides: _legacyImageInputOverrides, ...knownPreferences } = candidate;
   const merged = {
     ...DEFAULT_PREFERENCES,
-    ...knownPreferences,
+    ...candidate,
     version: 1,
     keybindings: { ...DEFAULT_PREFERENCES.keybindings, ...keybindings },
     integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations },
+    imageInputOverrides: { ...imageInputOverrides },
     customModels: Object.fromEntries(Object.keys(DEFAULT_PREFERENCES.customModels).map((provider) => {
       const values = Array.isArray(customModels[provider]) ? customModels[provider] : [];
       const normalized = [...new Set(values.map((value) => String(value).trim()).filter(Boolean))]
@@ -142,7 +168,14 @@ export function mergePreferences(value) {
       return [provider, normalized];
     }))
   };
-  return { ...merged, mode: isModeId(merged.mode) ? merged.mode : "general" };
+  const meetingAudioSource = ["microphone", "system", "both"].includes(merged.meetingAudioSource) ? merged.meetingAudioSource : "both";
+  return {
+    ...merged,
+    meetingAudioSource,
+    whisperExecutable: String(merged.whisperExecutable ?? "whisper-cli").trim().slice(0, 1_000) || "whisper-cli",
+    whisperModelPath: String(merged.whisperModelPath ?? "").trim().slice(0, 4_000),
+    mode: isModeId(merged.mode) ? merged.mode : "general"
+  };
 }
 
 export function reduceOverlay(state, event) {
@@ -159,6 +192,61 @@ export function reduceOverlay(state, event) {
       return state.phase === "hidden" ? reduceOverlay(state, { type: "SHOW" }) : reduceOverlay(state, { type: "HIDE" });
     case "SET_PROMPT":
       return { ...state, prompt: String(event.prompt ?? "").slice(0, 8_000) };
+    case "SET_SCREEN_CONTEXT_ENABLED":
+      {
+      const keepActiveAttachment = state.screenContext.status === "attached" && state.screenContext.attachmentId;
+      return {
+        ...state,
+        screenContext: {
+          ...state.screenContext,
+          enabled: Boolean(event.enabled),
+          status: keepActiveAttachment ? "attached" : "idle",
+          attachmentId: keepActiveAttachment ? state.screenContext.attachmentId : null,
+          capturedAt: keepActiveAttachment ? state.screenContext.capturedAt : null,
+          displayId: keepActiveAttachment ? state.screenContext.displayId : null,
+          errorCode: null,
+          error: null
+        }
+      };
+      }
+    case "SET_SCREEN_CAPABILITY":
+      return { ...state, screenContext: { ...state.screenContext, capability: event.capability ?? "unknown" } };
+    case "SCREEN_CAPTURE_STARTED":
+      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      return { ...state, screenContext: { ...state.screenContext, status: "capturing", attachmentId: null, capturedAt: null, displayId: null, errorCode: null, error: null } };
+    case "SCREEN_CAPTURE_ATTACHED":
+      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      return {
+        ...state,
+        screenContext: {
+          ...state.screenContext,
+          status: "attached",
+          attachmentId: String(event.attachmentId ?? ""),
+          capturedAt: Number(event.capturedAt ?? Date.now()),
+          displayId: String(event.displayId ?? ""),
+          errorCode: null,
+          error: null
+        }
+      };
+    case "SCREEN_CAPTURE_FAILED":
+      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
+      return {
+        ...state,
+        screenContext: {
+          ...state.screenContext,
+          status: event.status === "permission-blocked" || event.status === "unsupported" ? event.status : "error",
+          attachmentId: null,
+          capturedAt: null,
+          displayId: null,
+          errorCode: String(event.errorCode ?? "capture-failed"),
+          error: String(event.error ?? "Screen context could not be captured.")
+        }
+      };
+    case "SCREEN_CAPTURE_CLEARED":
+      return {
+        ...state,
+        screenContext: { ...state.screenContext, status: "idle", attachmentId: null, capturedAt: null, displayId: null, errorCode: null, error: null }
+      };
     case "SUBMIT": {
       if (state.requestId) return state;
       const prompt = String(event.prompt ?? state.prompt).trim().slice(0, 8_000);
@@ -234,12 +322,28 @@ export function reduceOverlay(state, event) {
     }
     case "EXPAND":
       return { ...state, phase: state.messages.length ? "expanded-response" : "expanded-empty" };
+    case "SHOW_LIVE_NOTES":
+      return { ...state, phase: "expanded-notes", selectedHistoryId: null, error: null };
     case "COLLAPSE":
       return { ...state, phase: state.startedAt ? "compact-listening" : "compact-idle", error: null, selectedHistoryId: null };
-    case "START_LISTENING":
-      return { ...state, phase: isExpandedPhase(state.phase) ? state.phase : "compact-listening", startedAt: state.startedAt ?? Date.now() };
+    case "START_LISTENING": {
+      const source = ["microphone", "system", "both"].includes(event.source) ? event.source : "both";
+      return {
+        ...state,
+        phase: isExpandedPhase(state.phase) ? state.phase : "compact-listening",
+        startedAt: state.startedAt ?? Date.now(),
+        meeting: { sessionId: String(event.sessionId ?? crypto.randomUUID()), source, status: "listening", transcriptCount: 0, artifact: null, updatedAt: null, error: null }
+      };
+    }
     case "STOP_LISTENING":
-      return { ...state, phase: isExpandedPhase(state.phase) ? state.phase : "compact-idle", startedAt: null };
+      return {
+        ...state,
+        phase: isExpandedPhase(state.phase) ? state.phase : "compact-idle",
+        startedAt: null,
+        meeting: { ...state.meeting, status: state.meeting.status === "error" ? "error" : state.meeting.sessionId ? "finalizing" : "idle" }
+      };
+    case "MEETING_STATUS":
+      return { ...state, meeting: { ...state.meeting, ...event.meeting } };
     case "SHOW_HISTORY":
       return { ...state, phase: "expanded-history", selectedHistoryId: null, error: null };
     case "LOAD_CONVERSATION": {
@@ -265,13 +369,14 @@ export function reduceOverlay(state, event) {
       };
     }
     case "CLEAR": {
-      const cleared = createInitialOverlayState(true);
+      const cleared = createInitialOverlayState(true, state.screenContext.enabled);
       const phase = isExpandedPhase(state.phase) ? "expanded-empty" : state.startedAt ? "compact-listening" : "compact-idle";
       return {
         ...cleared,
         phase,
         previousVisiblePhase: phase,
-        startedAt: state.startedAt
+        startedAt: state.startedAt,
+        screenContext: { ...cleared.screenContext, capability: state.screenContext.capability }
       };
     }
     default:
@@ -284,9 +389,6 @@ export function demoResponse(prompt, mode = {}) {
   const modeLabel = String(mode.label ?? "General");
   const modeFocus = String(mode.behaviorSummary ?? "Direct, concise assistance.");
   if (/error/i.test(compact)) throw new Error("The local demo provider intentionally failed. Your data stayed on this Mac.");
-  if (/markdown|code example|code snippet/i.test(compact)) {
-    return `\`\`\`ts\nconst nextStep = (owner: string) => ({\n  owner,\n  status: "ready to verify"\n});\n\`\`\`\n\n### Verify the handoff\n\nUse \`nextStep\` to record the owner before moving to the release gate.\n\n- Confirm the expected outcome\n- Attach the evidence\n- [Read the local-first guide](https://example.com/local-first)`;
-  }
   if (/sequence|plan|next/i.test(compact)) {
     return `${modeLabel} mode · ${modeFocus}\n\nHere’s a focused sequence:\n\n• Confirm the outcome and the release gate\n• Capture decisions with a clear owner\n• Finish the smallest testable slice first\n• Verify failure recovery before adding integrations\n• Record the result and attach evidence`;
   }

@@ -18,6 +18,7 @@ This implementation was created from a clean `origin/main` baseline. It does not
 - Native Swift microphone and ScreenCaptureKit system-audio helper with a versioned handshake, sequence epochs, structured errors, and bounded desktop buffering.
 - Local `node:sqlite` database isolated in an Electron utility process, with WAL, migrations, ordered conversation messages, FTS5 search, transcripts, artifacts, and exports.
 - A local whisper.cpp CLI adapter, context budgeting, generated-artifact validation, transcript prompt-injection marking, and inference backpressure.
+- Continuous local live meeting notes: explicit microphone/system-audio source selection, pause-bounded transcription batches, transient raw-audio files, timestamped local transcript segments, and a dedicated summary/decisions/actions view.
 - Optional encrypted sync envelopes and a row-level-secured Supabase ciphertext schema. Cloud sync remains off by default and never receives provider keys or performs v1 inference.
 - Best-effort overlay content protection with honest wording: Clarity does not claim guaranteed invisibility.
 
@@ -40,6 +41,8 @@ COREPACK_INTEGRITY_KEYS=0 corepack pnpm@10.32.1 dev
 ```
 
 Development mode uses the offline deterministic provider and a fresh two-window shell. Ask a question, then keep using the same composer for follow-ups; open Recent conversations to resume a saved thread or choose New chat to start over. Provider keys are entered in Settings → Models and stored in Keychain; do not put them in `.env`. After saving a key, refresh the provider catalog or add a custom model ID, select a model, and use Test connection to verify that exact configuration.
+
+To use live meeting notes, configure a local Whisper executable and model file in Settings → Audio. Start listening from the overlay, choose Microphone, System audio, or Both, then open the sparkle button for the live notes view. Clarity transcribes only completed speech batches locally and updates one local artifact. For a YouTube smoke test, open a video in your browser, choose System audio, and start listening; Clarity does not receive or store the URL, download media, or retain raw audio after each local batch is transcribed.
 
 ## Verify
 

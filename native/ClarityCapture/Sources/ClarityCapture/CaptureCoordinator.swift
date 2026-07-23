@@ -38,7 +38,10 @@ final class CaptureCoordinator: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw NSError(domain: "ClarityCapture", code: 10, userInfo: [NSLocalizedDescriptionKey: "No microphone format is available"]) }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        guard let normalizedFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false) else {
+            throw NSError(domain: "ClarityCapture", code: 12, userInfo: [NSLocalizedDescriptionKey: "Unable to create the live-notes microphone format"])
+        }
+        input.installTap(onBus: 0, bufferSize: 1024, format: normalizedFormat) { [weak self] buffer, _ in
             self?.emit(buffer: buffer, source: "microphone")
         }
         audioEngine.prepare()
@@ -67,15 +70,35 @@ final class CaptureCoordinator: NSObject, SCStreamOutput, SCStreamDelegate, @unc
     }
 
     private func emit(buffer: AVAudioPCMBuffer, source: String) {
-        let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-        guard let first = buffers.first, let raw = first.mData else { return }
-        emit(data: Data(bytes: raw, count: Int(first.mDataByteSize)), source: source, sampleRate: buffer.format.sampleRate, channels: Int(buffer.format.channelCount))
+        guard let samples = buffer.floatChannelData else { return }
+        let count = Int(buffer.frameLength)
+        var output = Data(capacity: count * 2)
+        for index in 0..<count {
+            let clipped = max(-1, min(1, samples[0][index]))
+            var value = UInt16(bitPattern: Int16(clipped * Float(Int16.max))).littleEndian
+            withUnsafeBytes(of: &value) { output.append(contentsOf: $0) }
+        }
+        emitPCM16(data: output, source: source, sampleRate: 16_000)
     }
 
-    private func emit(data: Data, source: String, sampleRate: Double, channels: Int) {
-        let reply = CaptureReply(protocolVersion: 1, requestId: nil, type: "audio", ok: true, error: nil, capabilities: nil, epoch: epoch, sequence: sequence, source: source, sampleRate: sampleRate, channels: channels, pcm: data.base64EncodedString())
+    private func emitPCM16(data: Data, source: String, sampleRate: Double = 16_000) {
+        let reply = CaptureReply(protocolVersion: 1, requestId: nil, type: "audio", ok: true, error: nil, capabilities: nil, epoch: epoch, sequence: sequence, source: source, sampleRate: sampleRate, channels: 1, pcm: data.base64EncodedString())
         sequence += 1
         emitter.send(reply)
+    }
+
+    private func pcm16(fromFloat32 data: Data) -> Data {
+        var output = Data(capacity: (data.count / 4) * 2)
+        data.withUnsafeBytes { raw in
+            let count = raw.count / MemoryLayout<Float32>.size
+            for index in 0..<count {
+                let input = raw.loadUnaligned(fromByteOffset: index * MemoryLayout<Float32>.size, as: Float32.self)
+                let clipped = max(-1, min(1, input))
+                var value = UInt16(bitPattern: Int16(clipped * Float(Int16.max))).littleEndian
+                withUnsafeBytes(of: &value) { output.append(contentsOf: $0) }
+            }
+        }
+        return output
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
@@ -86,7 +109,14 @@ final class CaptureCoordinator: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         var pointer: UnsafeMutablePointer<Int8>?
         guard CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &pointer) == kCMBlockBufferNoErr,
               let pointer else { return }
-        emit(data: Data(bytes: pointer, count: length), source: "system", sampleRate: 16_000, channels: 1)
+        let raw = Data(bytes: pointer, count: length)
+        guard let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(description) else { return }
+        if streamDescription.pointee.mBitsPerChannel == 16 {
+            emitPCM16(data: raw, source: "system")
+        } else if streamDescription.pointee.mBitsPerChannel == 32 {
+            emitPCM16(data: pcm16(fromFloat32: raw), source: "system")
+        }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {

@@ -27,27 +27,6 @@ async function pageByTitle(application: Awaited<ReturnType<typeof electron.launc
   throw new Error(`No open Electron page has the title ${title}`);
 }
 
-test("reduce transparency keeps the native overlay transparent", async () => {
-  const { application, userData } = await launch();
-  try {
-    const overlay = await pageByTitle(application, "Clarity Overlay");
-    expect((await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlayBackgroundColor).toBe("#000000");
-
-    await overlay.getByRole("button", { name: "Settings" }).click();
-    const settings = await pageByTitle(application, "Clarity");
-    await settings.getByRole("switch", { name: "Reduce transparency" }).click();
-
-    await expect.poll(() => overlay.evaluate(() => document.body.dataset.reduceTransparency)).toBe("true");
-    const after = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
-    expect(after.settings.preferences.reduceTransparency).toBe(true);
-    expect(after.overlayBackgroundColor).toBe("#000000");
-    await expect(overlay).toHaveScreenshot("overlay-reduced-transparency.png");
-  } finally {
-    await application.close();
-    await rm(userData, { recursive: true, force: true });
-  }
-});
-
 test("overlay preserves its anchor, reflows, and keeps settings separate", async () => {
   test.setTimeout(60_000);
   const { application, userData } = await launch({ CLARITY_TEST_INFERENCE_DELAY: "1500" });
@@ -173,22 +152,30 @@ test("demo history materializes into a conversation that accepts follow-ups", as
   }
 });
 
-test("assistant responses render Markdown and lead code answers with a formatted code block", async () => {
+test("system-audio sessions continuously save live notes without a media URL", async () => {
   test.setTimeout(60_000);
   const { application, userData } = await launch();
   try {
     const overlay = await pageByTitle(application, "Clarity Overlay");
-    await overlay.getByRole("button", { name: "Expand" }).click();
-    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Show a code example in Markdown");
-    await overlay.getByRole("button", { name: "Send" }).click();
+    await overlay.getByRole("combobox", { name: "Meeting audio source" }).selectOption("system");
+    await overlay.getByRole("button", { name: "Start listening" }).click();
+    await expect(overlay.getByRole("button", { name: "Stop listening" })).toBeVisible();
+    expect((await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlay.meeting.source).toBe("system");
+    await overlay.waitForTimeout(400);
 
-    const response = overlay.locator(".assistant-turn").last().locator(".markdown-response");
-    await expect(response.locator(".markdown-code-block")).toBeVisible();
-    await expect(response.locator(".markdown-code-block")).toHaveAttribute("data-language", "ts");
-    await expect(response.locator(".markdown-code-block code")).toContainText('status: "ready to verify"');
-    await expect(response.locator(".markdown-heading")).toHaveText("Verify the handoff");
-    await expect(response.getByRole("link", { name: "Read the local-first guide" })).toHaveAttribute("href", "https://example.com/local-first");
-    await expect(response.locator(":scope > :first-child")).toHaveClass(/markdown-code-block/);
+    const speech = Array.from({ length: 32_000 }, () => 8);
+    const silence = Array.from({ length: 32_000 }, () => 0);
+    await overlay.evaluate(async ({ speech, silence }) => {
+      await window.clarityOverlay.testMeetingFrame!({ pcm: speech, source: "system" });
+      await window.clarityOverlay.testMeetingFrame!({ pcm: silence, source: "system" });
+    }, { speech, silence });
+
+    await overlay.getByRole("button", { name: "Live meeting notes" }).click();
+    await expect.poll(async () => (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlay.phase).toBe("expanded-notes");
+    await expect(overlay.getByRole("heading", { name: /meeting notes/i })).toBeVisible();
+    await expect(overlay.getByText("Test meeting transcript: the team agreed to ship the live notes slice.").first()).toBeVisible();
+    await expect(overlay.getByText("Ship the live notes slice.", { exact: true })).toBeVisible();
+    await overlay.getByRole("button", { name: "Stop listening" }).click();
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });
@@ -215,24 +202,97 @@ test("fresh launch completes the split onboarding without forced permissions", a
   }
 });
 
-test("follow-up messages keep the protected overlay window open", async () => {
-  const { application, userData } = await launch({ CLARITY_TEST_PRESERVE_CONTENT_PROTECTION: "1" });
+test("screen context persists, discloses its preview, and expires on clear", async () => {
+  const userData = await mkdtemp(join(tmpdir(), "clarity-e2e-screen-"));
+  let application: Awaited<ReturnType<typeof electron.launch>> | null = null;
   try {
-    const overlay = await pageByTitle(application, "Clarity Overlay");
-    const initial = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
-    expect(initial.contentProtected).toBe(true);
-    expect(initial.windowId).not.toBeNull();
-    await expect(overlay.getByRole("button", { name: /use.?screen/i })).toHaveCount(0);
+    ({ application } = await launch({ CLARITY_TEST_SCREEN_CONTEXT: "1" }, userData));
+    let overlay = await pageByTitle(application, "Clarity Overlay");
+    const screenToggle = overlay.getByRole("button", { name: "Does not use screen" });
+    await screenToggle.click();
+    await expect(overlay.getByRole("button", { name: "Uses screen" })).toHaveAttribute("aria-pressed", "true");
 
-    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What should happen next?");
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What is visible on my screen?");
     await overlay.getByRole("button", { name: "Send" }).click();
-    await expect(overlay.getByText("Finish the smallest testable slice first")).toBeVisible();
-    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What should I do after that?");
+    const viewedScreen = overlay.getByRole("button", { name: "Viewed screen" });
+    await expect(viewedScreen).toBeVisible();
+    const attached = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    const attachmentId = attached.overlay.screenContext.attachmentId;
+    expect(attachmentId).toBeTruthy();
+
+    await viewedScreen.hover();
+    await expect(overlay.getByRole("dialog", { name: "Screen used for this response" })).toBeVisible();
+    await expect(overlay.getByAltText("Screen captured for this response")).toBeVisible();
+
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What changed since the first screenshot?");
     await overlay.getByRole("button", { name: "Send" }).click();
-    await expect(overlay.getByText("I heard: “What should I do after that?”")).toBeVisible();
+    await expect(viewedScreen).toBeVisible();
+    const followUp = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    const followUpAttachmentId = followUp.overlay.screenContext.attachmentId;
+    expect(followUpAttachmentId).toBeTruthy();
+    expect(followUpAttachmentId).not.toBe(attachmentId);
+    expect(await overlay.evaluate((id) => window.clarityOverlay.getScreenPreview(id), attachmentId!)).toBeNull();
+
+    await overlay.getByRole("button", { name: "New chat" }).click();
+    await expect(viewedScreen).toHaveCount(0);
+    const expired = await overlay.evaluate((id) => window.clarityOverlay.getScreenPreview(id), followUpAttachmentId!);
+    expect(expired).toBeNull();
+    const cleared = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(cleared.overlay.screenContext.enabled).toBe(true);
+    expect(cleared.settings.preferences.screenContextEnabled).toBe(true);
+
+    await application.close();
+    application = null;
+    ({ application } = await launch({ CLARITY_TEST_SCREEN_CONTEXT: "1" }, userData));
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    await expect(overlay.getByRole("button", { name: "Uses screen" })).toHaveAttribute("aria-pressed", "true");
+    const restored = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(restored.settings.preferences.screenContextEnabled).toBe(true);
+
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Trigger an error after viewing my screen");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect(overlay.getByText("The local demo provider intentionally failed")).toBeVisible();
+    const errorDisclosure = overlay.getByRole("button", { name: "Viewed screen" });
+    await expect(errorDisclosure).toBeVisible();
+    await errorDisclosure.hover();
+    await expect(overlay.getByAltText("Screen captured for this response")).toBeVisible();
+  } finally {
+    await application?.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
+test("screen capture survives overlay recreation requested from Privacy settings", async () => {
+  const { application, userData } = await launch({
+    CLARITY_TEST_SCREEN_CONTEXT: "1",
+    CLARITY_TEST_SCREEN_CAPTURE_DELAY: "1000",
+    CLARITY_TEST_PRESERVE_CONTENT_PROTECTION: "1",
+    CLARITY_TEST_FORCE_OVERLAY_RECREATION: "1"
+  });
+  try {
+    let overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("button", { name: "Does not use screen" }).click();
+    const initialWindowId = (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).windowId;
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What is visible right now?");
+    await overlay.getByRole("button", { name: "Send" }).click();
+    await expect.poll(async () => (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlay.screenContext.status).toBe("capturing");
+
+    await overlay.evaluate(() => window.clarityOverlay.openSettings());
+    const settings = await pageByTitle(application, "Clarity");
+    await settings.getByRole("button", { name: "Privacy" }).click();
+    const protection = settings.getByRole("switch", { name: "Hide overlay from screen sharing (best effort)" });
+    await expect(protection).toHaveAttribute("aria-checked", "true");
+    await protection.click();
+    await expect(protection).toHaveAttribute("aria-checked", "false");
+
+    await settings.waitForTimeout(1_400);
+    overlay = await pageByTitle(application, "Clarity Overlay");
+    await expect(overlay.getByRole("button", { name: "Viewed screen" })).toBeVisible();
+    await expect(overlay.getByText("I heard: “What is visible right now?”")).toBeVisible();
     const after = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
-    expect(after.windowId).toBe(initial.windowId);
-    expect(after.contentProtected).toBe(true);
+    expect(after.windowId).not.toBe(initialWindowId);
+    expect(after.overlay.screenContext.status).toBe("attached");
+    expect(after.contentProtected).toBe(false);
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });

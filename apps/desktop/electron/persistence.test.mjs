@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,16 +28,18 @@ describe("PreferenceStore", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ mode: "sales", reduceMotion: true });
   });
 
-  it("removes legacy screen-context preferences on the next update", async () => {
+  it("does not drop screen preferences during concurrent updates", async () => {
     const path = await temporaryPath();
-    await writeFile(path, JSON.stringify({ screenContextEnabled: true, imageInputOverrides: { "legacy:model": true }, provider: "nvidia" }));
     const store = new PreferenceStore(path);
-    await store.load();
-    await store.update({ model: "custom/model" });
-    const saved = JSON.parse(await readFile(path, "utf8"));
-    expect(saved).toMatchObject({ provider: "nvidia", model: "custom/model" });
-    expect(saved).not.toHaveProperty("screenContextEnabled");
-    expect(saved).not.toHaveProperty("imageInputOverrides");
+    await Promise.all([
+      store.update({ screenContextEnabled: true }),
+      store.update({ provider: "nvidia", model: "custom/vision" })
+    ]);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+      screenContextEnabled: true,
+      provider: "nvidia",
+      model: "custom/vision"
+    });
   });
 
   it("keeps the committed value when rename fails and allows a later update", async () => {

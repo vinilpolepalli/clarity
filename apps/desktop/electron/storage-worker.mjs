@@ -36,6 +36,9 @@ const statements = {
   remove: database.prepare("DELETE FROM sessions WHERE id = ?"),
   removeIndex: database.prepare("DELETE FROM session_search WHERE session_id = ?"),
   appendSegment: database.prepare("INSERT OR REPLACE INTO transcript_segments(id, session_id, sequence, speaker, text, started_ms, ended_ms) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  transcript: database.prepare("SELECT id, sequence, speaker, text, started_ms AS startedMs, ended_ms AS endedMs FROM transcript_segments WHERE session_id = ? ORDER BY sequence"),
+  artifact: database.prepare("SELECT id, kind, content, created_at AS createdAt FROM artifacts WHERE session_id = ? AND kind = ? ORDER BY created_at DESC LIMIT 1"),
+  upsertArtifact: database.prepare("INSERT INTO artifacts(id, session_id, kind, content, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content = excluded.content, created_at = excluded.created_at"),
   exportSession: database.prepare("SELECT s.*, (SELECT json_group_array(json_object('speaker', speaker, 'text', text, 'startedMs', started_ms, 'endedMs', ended_ms)) FROM transcript_segments t WHERE t.session_id = s.id ORDER BY sequence) AS transcript FROM sessions s WHERE id = ?")
 };
 
@@ -70,6 +73,13 @@ function handle(method, params) {
       const now = params.timestamp ?? new Date().toISOString();
       statements.insert.run(params.id, params.title, "", "", now, now, params.mode ?? "general", params.modePromptVersion ?? 1, params.status ?? "active");
       statements.searchIndex.run(params.id, params.title, "", "");
+      return conversation(params.id);
+    }
+    case "createMeetingSession": {
+      const now = params.timestamp ?? new Date().toISOString();
+      statements.insertIfMissing.run(params.id, params.title ?? "Live meeting", "", "", now, now, "meeting", 1, "active");
+      database.prepare("UPDATE sessions SET capture_source = ?, status = ?, updated_at = ? WHERE id = ?").run(params.captureSource ?? "both", "active", now, params.id);
+      statements.searchIndex.run(params.id, params.title ?? "Live meeting", "", "");
       return conversation(params.id);
     }
     case "ensureConversation": {
@@ -118,6 +128,22 @@ function handle(method, params) {
     }
     case "appendSegment": {
       statements.appendSegment.run(params.id, params.sessionId, params.sequence, params.speaker ?? null, params.text, params.startedMs, params.endedMs);
+      return true;
+    }
+    case "getTranscript": return statements.transcript.all(params.sessionId);
+    case "upsertArtifact": {
+      const createdAt = params.createdAt ?? new Date().toISOString();
+      statements.upsertArtifact.run(params.id, params.sessionId, params.kind, JSON.stringify(params.content), createdAt);
+      statements.touchSession.run(createdAt, params.sessionId);
+      const artifact = statements.artifact.get(params.sessionId, params.kind);
+      return artifact ? { ...artifact, content: JSON.parse(artifact.content) } : null;
+    }
+    case "getArtifact": {
+      const artifact = statements.artifact.get(params.sessionId, params.kind);
+      return artifact ? { ...artifact, content: JSON.parse(artifact.content) } : null;
+    }
+    case "completeMeetingSession": {
+      database.prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?").run(params.status ?? "complete", new Date().toISOString(), params.sessionId);
       return true;
     }
     case "search": return statements.search.all(String(params.query).replace(/["']/g, " "), Math.min(Number(params.limit ?? 30), 100));
