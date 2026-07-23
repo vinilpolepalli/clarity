@@ -34,8 +34,8 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     const overlay = await pageByTitle(application, "Clarity Overlay");
     await expect(overlay.locator("[data-phase='compact-idle']")).toBeVisible();
     const compact = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
-    expect(compact.bounds.width).toBe(680);
-    expect(compact.bounds.height).toBe(104);
+    expect(compact.bounds.width).toBe(760);
+    expect(compact.bounds.height).toBe(116);
     await expect(overlay).toHaveScreenshot("overlay-compact.png");
 
     await overlay.getByRole("button", { name: "Expand" }).click();
@@ -121,7 +121,7 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     await overlay.getByRole("button", { name: "Collapse" }).click();
     const collapsed = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
     expect(collapsed.bounds.width).toBe(430);
-    expect(collapsed.bounds.height).toBe(104);
+    expect(collapsed.bounds.height).toBe(116);
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });

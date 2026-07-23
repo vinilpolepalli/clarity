@@ -54,11 +54,16 @@ export class ScreenContextService {
     this.captureFixture = captureFixture;
     this.attachment = null;
     this.ownerRequestId = null;
+    this.verifiedScreenAccess = false;
   }
 
   permissionStatus() {
     if (this.platform !== "darwin") return "granted";
     return this.systemPreferences.getMediaAccessStatus("screen");
+  }
+
+  hasVerifiedScreenAccess() {
+    return this.verifiedScreenAccess;
   }
 
   metadata() {
@@ -122,15 +127,11 @@ export class ScreenContextService {
     }
 
     let permission = this.permissionStatus();
-    if (permission === "denied") {
-      this.clear(requestId);
-      throw new ScreenContextError("permission-denied", "Screen Recording is off for Clarity.", permission);
-    }
     if (permission === "restricted") {
       this.clear(requestId);
       throw new ScreenContextError("permission-restricted", "Screen Recording is restricted by this Mac's policy.", permission);
     }
-    if (permission !== "granted" && permission !== "not-determined") {
+    if (!["granted", "not-determined", "denied"].includes(permission)) {
       this.clear(requestId);
       throw new ScreenContextError("permission-unknown", "Clarity could not verify screen access.", permission);
     }
@@ -159,18 +160,17 @@ export class ScreenContextService {
       display = this.screen.getAllDisplays().find((candidate) => String(candidate.id) === targetId);
       if (!display) throw new ScreenContextError("display-changed", "The target display changed before Clarity could capture it. Try again.");
       const sources = await this.desktopCapturer.getSources({ types: ["screen"], thumbnailSize: thumbnailSize(display.size) });
-      if (permission === "not-determined") {
-        permission = this.permissionStatus();
-        if (permission !== "granted") {
-          const code = permission === "restricted" ? "permission-restricted" : permission === "denied" ? "permission-denied" : "permission-not-granted";
-          throw new ScreenContextError(code, "Screen Recording permission was not granted.", permission);
-        }
-      }
       throwIfAborted(signal);
       let source = sources.find((candidate) => String(candidate.display_id) === targetId);
       if (!source && sources.length === 1) source = sources[0];
-      if (!source) throw new ScreenContextError("source-unavailable", "Clarity could not find the target display. Try again.");
-      if (!source.thumbnail || source.thumbnail.isEmpty()) throw new ScreenContextError("empty-capture", "macOS returned an empty screen capture. Try again.");
+      if (!source) {
+        if (permission === "denied" || permission === "not-determined") throw new ScreenContextError("permission-denied", "Screen Recording is off for this copy of Clarity. Enable it in System Settings, then try again.", permission);
+        throw new ScreenContextError("source-unavailable", "Clarity could not find the target display. Try again.");
+      }
+      if (!source.thumbnail || source.thumbnail.isEmpty()) {
+        if (permission === "denied" || permission === "not-determined") throw new ScreenContextError("permission-denied", "Screen Recording is off for this copy of Clarity. Enable it in System Settings, then try again.", permission);
+        throw new ScreenContextError("empty-capture", "macOS returned an empty screen capture. Try again.");
+      }
 
       let image = source.thumbnail;
       let bytes = image.toPNG();
@@ -194,6 +194,7 @@ export class ScreenContextService {
         width: size.width,
         height: size.height
       };
+      this.verifiedScreenAccess = true;
       return this.metadata();
     } catch (error) {
       if (this.ownerRequestId === requestId) this.clear(requestId);

@@ -58,8 +58,14 @@ describe("ScreenContextService", () => {
     expect(overlayWindow.showInactive).toHaveBeenCalled();
   });
 
-  it("fails closed when permission is denied", async () => {
+  it("accepts a real capture when macOS reports a stale denied status", async () => {
     const { instance } = service({ permission: "denied" });
+    await expect(instance.capture("request-1", { targetDisplayId: 2 })).resolves.toMatchObject({ displayId: "2" });
+    expect(instance.hasVerifiedScreenAccess()).toBe(true);
+  });
+
+  it("fails closed when a denied permission cannot produce a capture", async () => {
+    const { instance } = service({ permission: "denied", sources: [] });
     await expect(instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "permission-denied" });
     expect(instance.metadata()).toBeNull();
   });
@@ -85,10 +91,10 @@ describe("ScreenContextService", () => {
     expect(instance.metadata()).toBeNull();
   });
 
-  it("fails closed when permission remains unresolved after capture is requested", async () => {
+  it("accepts a non-empty capture when permission status remains unresolved", async () => {
     const { instance } = service({ permission: ["not-determined", "denied"] });
-    await expect(instance.capture("request-1", { targetDisplayId: 2 })).rejects.toMatchObject({ code: "permission-denied" });
-    expect(instance.metadata()).toBeNull();
+    await expect(instance.capture("request-1", { targetDisplayId: 2 })).resolves.toMatchObject({ displayId: "2" });
+    expect(instance.hasVerifiedScreenAccess()).toBe(true);
   });
 
   it("clears and restores the overlay when the capture source is unavailable or empty", async () => {

@@ -23,6 +23,7 @@ import {
   X
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
+import { MarkdownResponse } from "./MarkdownResponse";
 import { ModePicker } from "./ModePicker";
 import type { Conversation, ConversationMessage, HistoryItem, MeetingArtifact, ModeModel, OverlayState } from "./bridge";
 import "./styles.css";
@@ -41,17 +42,6 @@ function elapsed(startedAt: number | null, now: number) {
   if (!startedAt) return "";
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function ResponseBody({ text }: { text: string }) {
-  const paragraphs = text.split("\n");
-  return (
-    <div className="response-copy">
-      {paragraphs.map((line, index) => line.startsWith("• ")
-        ? <div className="response-bullet" key={`${index}-${line}`}><span>•</span><p>{line.slice(2)}</p></div>
-        : line ? <p key={`${index}-${line}`}>{line}</p> : <span className="paragraph-gap" key={index} />)}
-    </div>
-  );
 }
 
 function LiveNotes({ state, retry }: { state: OverlayState; retry: () => void }) {
@@ -144,7 +134,7 @@ function ConversationTurn({ message, state, isLatestAssistant, retry }: { messag
       <div className="assistant-meta"><span className="assistant-avatar"><BrandMark size={18} /></span><strong>Clarity</strong>{message.status === "streaming" && <small>Thinking…</small>}</div>
       {streamingEmpty
         ? <div className="typing-indicator" aria-label="Clarity is thinking"><i /><i /><i /></div>
-        : message.content && <ResponseBody text={message.content} />}
+        : message.content && <MarkdownResponse text={message.content} />}
       {viewedCurrentScreen && <ViewedScreen state={state} />}
       {message.status === "error" && (
         <div className="turn-error">
@@ -394,19 +384,23 @@ function OverlayApp() {
             onChange={(event) => { setDraft(event.target.value); void window.clarityOverlay.dispatch({ type: "SET_PROMPT", prompt: event.target.value }); }}
             placeholder={usesScreen ? (state.messages.length ? "Ask a follow-up about your screen…" : "Ask anything about your screen…") : state.messages.length ? "Ask a follow-up…" : listening ? "Ask about this conversation…" : "Ask anything…"}
           />
-          <IconButton
-            label={capturingScreen ? "Capturing current display" : usesScreen ? "Uses screen" : "Does not use screen"}
-            active={usesScreen}
-            pressed={usesScreen}
+          <button
+            className={`command-control ${usesScreen ? "is-active" : ""}`}
+            type="button"
+            aria-label={capturingScreen ? "Capturing current display" : usesScreen ? "Uses screen" : "Does not use screen"}
+            aria-pressed={usesScreen}
+            title="Attach the current screen to your next question"
             onClick={() => dispatch({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: !usesScreen })}
           >
             {capturingScreen ? <LoaderCircle className="spin" size={15} /> : <ImageIcon size={15} />}
-          </IconButton>
+            <span>Screen</span>
+          </button>
           <button ref={modeButton} className={`mode-pill ${modePicker ? "is-active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={Boolean(modePicker)} aria-label={`Assistant mode: ${modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.label ?? "General"}`} onClick={() => void toggleModePicker()}><Grid2X2 size={12} /><span>{modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.shortLabel ?? "General"}</span><ChevronDown size={10} /></button>
           {!listening && <select className="capture-source" aria-label="Meeting audio source" value={captureSource} onChange={(event) => setCaptureSource(event.target.value as typeof captureSource)}><option value="microphone">Mic</option><option value="system">System audio</option><option value="both">Both</option></select>}
-          <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch(listening ? { type: "STOP_LISTENING" } : { type: "START_LISTENING", source: captureSource })}>
+          <button className={`command-control ${listening ? "is-active" : ""}`} type="button" aria-label={listening ? "Stop listening" : "Start listening"} onClick={() => dispatch(listening ? { type: "STOP_LISTENING" } : { type: "START_LISTENING", source: captureSource })}>
             {listening ? <Square size={13} fill="currentColor" /> : <Mic size={15} />}
-          </IconButton>
+            <span>{listening ? "Stop" : "Listen"}</span>
+          </button>
           {expanded
             ? <IconButton label="Collapse" onClick={() => dispatch({ type: "COLLAPSE" })}><ChevronUp size={16} /></IconButton>
             : <IconButton label="Expand" onClick={() => dispatch({ type: "EXPAND" })}><ChevronDown size={16} /></IconButton>}

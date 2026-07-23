@@ -482,7 +482,9 @@ function rememberedGeometry() {
 }
 
 function hasLegacyDefaultCompactBounds(bounds) {
-  return Number(bounds?.width) === 590 && Number(bounds?.height) === 88;
+  const width = Number(bounds?.width);
+  const height = Number(bounds?.height);
+  return (width === 590 && height === 88) || (width === 680 && height === 104);
 }
 
 function applyOverlayPresentation(previousPhase, animate = true) {
@@ -792,7 +794,10 @@ function permissionStatus() {
   return {
     accessibility: systemPreferences.isTrustedAccessibilityClient(false) ? "granted" : "not-determined",
     microphone: systemPreferences.getMediaAccessStatus("microphone"),
-    screen: systemPreferences.getMediaAccessStatus("screen")
+    // macOS can retain an old TCC result after a locally signed app has been
+    // replaced. A successful ScreenCaptureKit capture is more authoritative
+    // for this running copy of Clarity than that stale status string.
+    screen: screenContext?.hasVerifiedScreenAccess() ? "granted" : systemPreferences.getMediaAccessStatus("screen")
   };
 }
 

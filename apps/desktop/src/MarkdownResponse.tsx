@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
 
 type MarkdownBlock =
   | { type: "code"; language: string; content: string }
@@ -112,6 +113,59 @@ function InlineContent({ content }: { content: string }) {
   return <>{content.split("\n").map((line, index) => <Fragment key={`${index}-${line}`}>{index > 0 && <br />}{inlineMarkdown(line)}</Fragment>)}</>;
 }
 
+const KEYWORDS = new Set("as async await break case catch class const continue def default do else except export extends finally for from function if import in interface let new of return static switch throw try while with yield".split(" "));
+const LITERALS = new Set("false true null none undefined".split(" "));
+const BUILT_INS = new Set("bool dict enumerate float int len list map print range set str tuple".split(" "));
+const TYPES = new Set("any boolean dict float int list number object string tuple void".split(" "));
+
+function codeTokenTone(token: string) {
+  const normalized = token.toLowerCase();
+  if (token.startsWith("#") || token.startsWith("//")) return "comment";
+  if (token.startsWith("\"") || token.startsWith("'")) return "string";
+  if (/^\d/.test(token)) return "number";
+  if (KEYWORDS.has(normalized)) return "keyword";
+  if (LITERALS.has(normalized)) return "literal";
+  if (BUILT_INS.has(normalized)) return "builtin";
+  if (TYPES.has(normalized) || /^[A-Z][A-Za-z0-9_]*$/.test(token)) return "type";
+  return "plain";
+}
+
+function HighlightedCode({ content }: { content: string }) {
+  const tokenPattern = /(\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
+  return <>{content.split("\n").map((line, lineIndex) => {
+    const nodes: ReactNode[] = [];
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+    tokenPattern.lastIndex = 0;
+    while ((match = tokenPattern.exec(line))) {
+      if (match.index > cursor) nodes.push(line.slice(cursor, match.index));
+      const token = match[0];
+      const tone = codeTokenTone(token);
+      nodes.push(tone === "plain" ? token : <span className={`code-token is-${tone}`} key={`${lineIndex}-${match.index}`}>{token}</span>);
+      cursor = tokenPattern.lastIndex;
+    }
+    if (cursor < line.length) nodes.push(line.slice(cursor));
+    return <Fragment key={`${lineIndex}-${line}`}>{nodes}{lineIndex < content.split("\n").length - 1 && "\n"}</Fragment>;
+  })}</>;
+}
+
+function CodeBlock({ language, content }: { language: string; content: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_600);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return <div className="markdown-code-block" data-language={language}>
+    <div className="markdown-code-header"><span>{language}</span><button type="button" onClick={() => void copyCode()} aria-label="Copy code">{copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy</>}</button></div>
+    <pre><code><HighlightedCode content={content} /></code></pre>
+  </div>;
+}
+
 export function MarkdownResponse({ text }: { text: string }) {
   return (
     <div className="response-copy markdown-response">
@@ -119,7 +173,7 @@ export function MarkdownResponse({ text }: { text: string }) {
         const key = `${block.type}-${index}`;
         switch (block.type) {
           case "code":
-            return <pre className="markdown-code-block" data-language={block.language} key={key}><code>{block.content}</code></pre>;
+            return <CodeBlock language={block.language} content={block.content} key={key} />;
           case "heading": {
             const Heading = `h${block.level}` as "h1" | "h2" | "h3";
             return <Heading className="markdown-heading" key={key}><InlineContent content={block.content} /></Heading>;
