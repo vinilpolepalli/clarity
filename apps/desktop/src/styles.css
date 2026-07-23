@@ -106,6 +106,12 @@ select:focus-visible {
   -webkit-backdrop-filter: blur(20px) saturate(1.05);
 }
 
+.overlay-document[data-reduce-transparency="true"] .overlay-surface {
+  background: var(--surface-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .has-mode-picker .overlay-surface {
   position: absolute;
   z-index: 1;
@@ -199,7 +205,7 @@ select:focus-visible {
   padding: 8px 8px 8px 12px;
   gap: 6px;
   align-items: center;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.01), transparent);
+  background: var(--surface);
 }
 
 .is-expanded .command-row {
@@ -449,9 +455,7 @@ select:focus-visible {
   height: 7px;
   overflow: hidden;
   border-radius: 5px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035));
-  background-size: 200% 100%;
-  animation: shimmer 1.25s linear infinite;
+  background: rgba(255, 255, 255, 0.075);
 }
 
 .shimmer-lines i:nth-child(2) { width: 88%; }
@@ -474,7 +478,7 @@ select:focus-visible {
   margin: -22px -24px 18px;
   padding: 18px 24px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.055);
-  background: linear-gradient(180deg, rgba(15, 15, 17, 0.99), rgba(15, 15, 17, 0.94));
+  background: #0f0f11;
   backdrop-filter: blur(12px);
 }
 
@@ -516,24 +520,91 @@ select:focus-visible {
   margin: 0;
 }
 
-.paragraph-gap {
-  display: block;
-  height: 9px;
+.markdown-response > * + * {
+  margin-top: 10px;
 }
 
-.response-bullet {
-  display: grid;
-  margin: 7px 0;
-  grid-template-columns: 13px 1fr;
-}
-
-.response-bullet > span {
-  color: var(--accent);
-}
-
-.response-bullet p {
+.markdown-response p {
   margin: 0;
 }
+
+.markdown-heading {
+  margin-bottom: 0;
+  color: #f2f3f0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.markdown-heading + * {
+  margin-top: 6px;
+}
+
+.markdown-list {
+  margin-bottom: 0;
+  padding-left: 19px;
+}
+
+.markdown-list li + li {
+  margin-top: 4px;
+}
+
+.markdown-quote {
+  margin-right: 0;
+  margin-bottom: 0;
+  margin-left: 0;
+  padding: 3px 0 3px 11px;
+  border-left: 2px solid rgb(var(--accent-rgb) / 0.62);
+  color: #afb2b4;
+}
+
+.markdown-response :not(pre) > code {
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: #dce7fb;
+  background: rgba(146, 183, 255, 0.1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-response a {
+  color: #aac8ff;
+  text-decoration-color: rgb(var(--accent-rgb) / 0.45);
+  text-underline-offset: 2px;
+}
+
+.markdown-code-block {
+  position: relative;
+  margin-right: 0;
+  margin-bottom: 0;
+  margin-left: 0;
+  padding: 30px 12px 12px;
+  overflow-x: auto;
+  border: 1px solid rgba(146, 183, 255, 0.22);
+  border-radius: 9px;
+  color: #e6ebf7;
+  background: #0a0d14;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.markdown-code-block::before {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  color: #8ea5ce;
+  content: attr(data-language);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 
 .response-footer {
   display: flex;
@@ -849,10 +920,6 @@ select:focus-visible {
 
 @keyframes breathe {
   50% { transform: scale(1.04); opacity: 0.78; }
-}
-
-@keyframes shimmer {
-  to { background-position: -200% 0; }
 }
 
 @keyframes typing {
@@ -1364,7 +1431,7 @@ kbd {
 
 .mode-card.is-selected {
   border-color: rgb(var(--accent-rgb) / 0.25);
-  background: linear-gradient(145deg, rgb(var(--accent-rgb) / 0.08), #131416 68%);
+  background: rgb(var(--accent-rgb) / 0.08);
 }
 
 .mode-behavior p {
@@ -1697,7 +1764,7 @@ kbd {
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 13px;
-  background: radial-gradient(circle at 10% 20%, rgb(var(--accent-rgb) / 0.08), transparent 42%), #131416;
+  background: #131416;
 }
 
 .about-hero h2 {
@@ -1752,7 +1819,7 @@ kbd {
   padding: 35px 42px 28px;
   flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.07);
-  background: linear-gradient(135deg, #101113, #0c0d0f 75%);
+  background: #101113;
 }
 
 .onboarding-copy-panel > .window-drag {
@@ -1968,7 +2035,7 @@ kbd {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  background: radial-gradient(circle at 52% 41%, #2a2d2d 0, #17191c 38%, #101114 68%, #0b0c0e 100%);
+  background: #17191c;
 }
 
 .preview-glow {
@@ -2247,7 +2314,7 @@ kbd {
   top: 47%;
   width: 1px;
   height: 45px;
-  background: linear-gradient(var(--accent), rgb(var(--accent-rgb) / 0.08));
+  background: var(--accent);
 }
 
 .spin {

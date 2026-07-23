@@ -7,6 +7,7 @@ const allowedActions = new Set([
 
 const overlayBridge = {
   getState: () => ipcRenderer.invoke("overlay:get-state"),
+  getAppearance: () => ipcRenderer.invoke("overlay:get-appearance"),
   dispatch: (action) => {
     if (!action || !allowedActions.has(action.type)) return Promise.reject(new Error("Unsupported overlay action"));
     return ipcRenderer.invoke("overlay:dispatch", action);
@@ -22,6 +23,11 @@ const overlayBridge = {
     const handler = (_event, state) => listener(state);
     ipcRenderer.on("overlay:state", handler);
     return () => ipcRenderer.removeListener("overlay:state", handler);
+  },
+  onAppearance: (listener) => {
+    const handler = (_event, appearance) => listener(appearance);
+    ipcRenderer.on("overlay:appearance", handler);
+    return () => ipcRenderer.removeListener("overlay:appearance", handler);
   },
   onModeModel: (listener) => {
     const handler = (_event, model) => listener(model);

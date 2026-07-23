@@ -21,6 +21,7 @@ import {
   X
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
+import { MarkdownResponse } from "./MarkdownResponse";
 import { ModePicker } from "./ModePicker";
 import type { Conversation, ConversationMessage, HistoryItem, ModeModel, OverlayState } from "./bridge";
 import "./styles.css";
@@ -41,17 +42,6 @@ function elapsed(startedAt: number | null, now: number) {
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function ResponseBody({ text }: { text: string }) {
-  const paragraphs = text.split("\n");
-  return (
-    <div className="response-copy">
-      {paragraphs.map((line, index) => line.startsWith("• ")
-        ? <div className="response-bullet" key={`${index}-${line}`}><span>•</span><p>{line.slice(2)}</p></div>
-        : line ? <p key={`${index}-${line}`}>{line}</p> : <span className="paragraph-gap" key={index} />)}
-    </div>
-  );
-}
-
 function ConversationTurn({ message, state, retry }: { message: ConversationMessage; state: OverlayState; retry: () => void }) {
   if (message.role === "user") return <div className="chat-turn user-turn"><div className="user-bubble">{message.content}</div></div>;
   const streamingEmpty = message.status === "streaming" && !message.content;
@@ -60,7 +50,7 @@ function ConversationTurn({ message, state, retry }: { message: ConversationMess
       <div className="assistant-meta"><span className="assistant-avatar"><BrandMark size={18} /></span><strong>Clarity</strong>{message.status === "streaming" && <small>Thinking…</small>}</div>
       {streamingEmpty
         ? <div className="typing-indicator" aria-label="Clarity is thinking"><i /><i /><i /></div>
-        : message.content && <ResponseBody text={message.content} />}
+        : message.content && <MarkdownResponse text={message.content} />}
       {message.status === "error" && (
         <div className="turn-error">
           <p>{state.error ?? "Clarity couldn’t finish that response."}</p>
@@ -178,6 +168,15 @@ function OverlayApp() {
     const removeModeListener = window.clarityOverlay.onModeModel(setModeModel);
     const removePickerListener = window.clarityOverlay.onPickerClosed(() => setModePicker(null));
     return () => { removeStateListener(); removeModeListener(); removePickerListener(); };
+  }, []);
+
+  useEffect(() => {
+    const applyAppearance = ({ reduceTransparency }: { reduceTransparency: boolean }) => {
+      document.body.dataset.reduceTransparency = String(reduceTransparency);
+    };
+    const removeAppearanceListener = window.clarityOverlay.onAppearance(applyAppearance);
+    window.clarityOverlay.getAppearance().then(applyAppearance);
+    return removeAppearanceListener;
   }, []);
 
   useEffect(() => {

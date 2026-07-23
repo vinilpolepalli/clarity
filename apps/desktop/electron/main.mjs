@@ -207,6 +207,16 @@ function sendOverlayState() {
   }
 }
 
+function getOverlayAppearance() {
+  return { reduceTransparency: Boolean(preferences.reduceTransparency) };
+}
+
+function sendOverlayAppearance() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send("overlay:appearance", getOverlayAppearance());
+  }
+}
+
 function sendSettingsModel() {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.webContents.send("settings:model", getSettingsModel());
@@ -396,8 +406,8 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
     ...bounds,
     title: "Clarity Overlay",
     frame: false,
-    transparent: !preferences.reduceTransparency,
-    backgroundColor: preferences.reduceTransparency ? "#111113" : "#00000000",
+    transparent: true,
+    backgroundColor: "#00000000",
     show: false,
     resizable: Boolean(initialBounds && isExpandedPhase(overlayState.phase)),
     maximizable: false,
@@ -437,6 +447,7 @@ function createOverlayWindow({ initialBounds, showWhenReady = false } = {}) {
   createdWindow.webContents.once("did-finish-load", () => {
     if (overlayWindow === createdWindow) {
       sendOverlayState();
+      sendOverlayAppearance();
       sendOverlayModeModel();
     }
   });
@@ -522,6 +533,7 @@ function getSettingsModel() {
 
 function registerIpc() {
   ipcMain.handle("overlay:get-state", () => structuredClone(overlayState));
+  ipcMain.handle("overlay:get-appearance", () => getOverlayAppearance());
   ipcMain.handle("overlay:dispatch", (_event, action) => dispatchOverlay(action));
   ipcMain.handle("overlay:get-mode-model", () => getModeModel());
   ipcMain.handle("overlay:set-mode", (_event, modeId) => setActiveMode(modeId));
@@ -588,6 +600,7 @@ function registerIpc() {
       }
     }
     sendSettingsModel();
+    if (Object.hasOwn(safePatch, "reduceTransparency")) sendOverlayAppearance();
     if (Object.hasOwn(safePatch, "mode")) sendOverlayModeModel();
     return getSettingsModel();
   });
@@ -660,6 +673,7 @@ function registerIpc() {
     ipcMain.handle("test:snapshot", () => ({
       overlay: structuredClone(overlayState),
       bounds: overlayWindow?.getBounds(),
+      overlayBackgroundColor: overlayWindow?.getBackgroundColor() ?? null,
       settings: getSettingsModel(),
       pickerOpen: Boolean(pickerAnchorBounds),
       activeRequest: activeRequestContext ? { requestId: activeRequestContext.requestId, modeId: activeRequestContext.modeId, promptVersion: activeRequestContext.promptVersion } : null,
