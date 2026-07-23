@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 function hasTable(database, name) {
   return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
@@ -30,7 +30,8 @@ export function initializeStorageDatabase(database) {
           updated_at TEXT NOT NULL,
           mode TEXT NOT NULL DEFAULT 'general',
           mode_prompt_version INTEGER NOT NULL DEFAULT 1,
-          status TEXT NOT NULL DEFAULT 'complete'
+          status TEXT NOT NULL DEFAULT 'complete',
+          capture_source TEXT
         );
       `);
     }
@@ -74,6 +75,11 @@ export function initializeStorageDatabase(database) {
       database.exec("ALTER TABLE sessions ADD COLUMN mode_prompt_version INTEGER NOT NULL DEFAULT 0");
     }
     database.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, datetime('now'))").run(3);
+
+    if (!hasColumn(database, "sessions", "capture_source")) {
+      database.exec("ALTER TABLE sessions ADD COLUMN capture_source TEXT");
+    }
+    database.prepare("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, datetime('now'))").run(4);
 
     database.exec("COMMIT");
   } catch (error) {

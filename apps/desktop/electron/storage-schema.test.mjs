@@ -21,12 +21,12 @@ async function openDatabase() {
 }
 
 describeWithSqlite("storage schema migrations", () => {
-  it("creates a fresh v3 schema with General and prompt version 1 defaults", async () => {
+  it("creates a fresh v4 schema with meeting capture metadata", async () => {
     const database = await openDatabase();
     expect(initializeStorageDatabase(database)).toBe(CURRENT_SCHEMA_VERSION);
     database.prepare("INSERT INTO sessions(id, title, started_at, updated_at) VALUES (?, ?, ?, ?)").run("fresh", "Fresh", "now", "now");
     expect({ ...database.prepare("SELECT mode, mode_prompt_version FROM sessions WHERE id = ?").get("fresh") }).toEqual({ mode: "general", mode_prompt_version: 1 });
-    expect(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version).toBe(3);
+    expect(database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version).toBe(4);
     database.close();
   });
 
@@ -46,6 +46,8 @@ describeWithSqlite("storage schema migrations", () => {
     initializeStorageDatabase(database);
     expect({ ...database.prepare("SELECT mode, mode_prompt_version FROM sessions WHERE id = ?").get("legacy") }).toEqual({ mode: "lecture", mode_prompt_version: 0 });
     expect(database.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 3").get().count).toBe(1);
+    expect(database.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 4").get().count).toBe(1);
+    expect(database.prepare("PRAGMA table_info(sessions)").all().some((column) => column.name === "capture_source")).toBe(true);
     database.close();
   });
 });

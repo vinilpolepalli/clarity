@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
 import { ModePicker } from "./ModePicker";
-import type { Conversation, ConversationMessage, HistoryItem, ModeModel, OverlayState } from "./bridge";
+import type { Conversation, ConversationMessage, HistoryItem, MeetingArtifact, ModeModel, OverlayState } from "./bridge";
 import "./styles.css";
 
 const isExpanded = (phase: string) => phase.startsWith("expanded-");
@@ -51,6 +51,26 @@ function ResponseBody({ text }: { text: string }) {
         ? <div className="response-bullet" key={`${index}-${line}`}><span>•</span><p>{line.slice(2)}</p></div>
         : line ? <p key={`${index}-${line}`}>{line}</p> : <span className="paragraph-gap" key={index} />)}
     </div>
+  );
+}
+
+function LiveNotes({ state, retry }: { state: OverlayState; retry: () => void }) {
+  const artifact: MeetingArtifact | null = state.meeting.artifact;
+  const updating = ["listening", "transcribing", "generating", "finalizing"].includes(state.meeting.status);
+  const updated = state.meeting.updatedAt ? new Date(state.meeting.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+  return (
+    <section className="expanded-content live-notes" aria-label="Live meeting notes">
+      <div className="section-heading"><div><span className="eyebrow">Local live notes</span><h2>{artifact?.title ?? "Meeting notes"}</h2></div><span className={`notes-status is-${state.meeting.status}`}>{updating ? "Updating" : state.meeting.status === "error" ? "Needs attention" : "Up to date"}</span></div>
+      {state.meeting.error && <div className="notes-error"><p>{state.meeting.error}</p><button className="secondary-button" type="button" onClick={retry}>Retry notes</button></div>}
+      {!artifact && !state.meeting.error && <div className="empty-state"><Sparkles size={23} /><h3>Listening for the first note</h3><p>Clarity updates locally after a natural speech pause.</p></div>}
+      {artifact && <div className="notes-document">
+        <section><h3>Summary</h3><p>{artifact.summary || "No summary yet."}</p></section>
+        <section><h3>Decisions</h3>{artifact.decisions.length ? <ul>{artifact.decisions.map((item, index) => <li key={`${index}-${item.text}`}><strong>{item.text}</strong>{item.evidence && <small>{item.evidence}</small>}</li>)}</ul> : <p className="notes-empty">No confirmed decisions yet.</p>}</section>
+        <section><h3>Actions</h3>{artifact.actions.length ? <ul>{artifact.actions.map((item, index) => <li key={`${index}-${item.text}`}><strong>{item.text}</strong><small>{[item.owner, item.due].filter(Boolean).join(" · ") || "Owner and due date not stated"}</small></li>)}</ul> : <p className="notes-empty">No action items yet.</p>}</section>
+        {artifact.openQuestions?.length ? <section><h3>Open questions</h3><ul>{artifact.openQuestions.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
+        <footer>{state.meeting.transcriptCount} transcript {state.meeting.transcriptCount === 1 ? "segment" : "segments"}{updated ? ` · Updated ${updated}` : ""}</footer>
+      </div>}
+    </section>
   );
 }
 
@@ -177,6 +197,10 @@ function ExpandedBody({
     );
   }
 
+  if (state.phase === "expanded-notes") {
+    return <LiveNotes state={state} retry={() => { void window.clarityOverlay.retryMeetingNotes().then((meeting) => dispatch({ type: "MEETING_STATUS", meeting })); }} />;
+  }
+
   if (state.phase === "expanded-error") {
     return (
       <section className="expanded-content error-state">
@@ -238,6 +262,7 @@ function OverlayApp() {
   const [modePicker, setModePicker] = useState<{ placement: "above" | "below"; viewportHeight: number; surfaceOffsetY: number; surfaceHeight: number } | null>(null);
   const [modeError, setModeError] = useState("");
   const [draft, setDraft] = useState("");
+  const [captureSource, setCaptureSource] = useState<"microphone" | "system" | "both">("both");
   const [now, setNow] = useState(Date.now());
   const input = useRef<HTMLInputElement>(null);
   const modeButton = useRef<HTMLButtonElement>(null);
@@ -255,6 +280,10 @@ function OverlayApp() {
     const removePickerListener = window.clarityOverlay.onPickerClosed(() => setModePicker(null));
     return () => { removeStateListener(); removeModeListener(); removePickerListener(); };
   }, []);
+
+  useEffect(() => {
+    if (!state?.startedAt) setCaptureSource(state?.meeting.source ?? "both");
+  }, [state?.meeting.source, state?.startedAt]);
 
   useEffect(() => {
     if (!state?.startedAt) return;
@@ -348,6 +377,7 @@ function OverlayApp() {
           </div>
           <div className="chrome-actions">
             <IconButton label="Recent conversations" active={state.phase === "expanded-history"} onClick={() => { void showHistory(); }}><History size={13} /></IconButton>
+            <IconButton label="Live meeting notes" active={state.phase === "expanded-notes"} onClick={() => { void dispatch({ type: "SHOW_LIVE_NOTES" }); }}><Sparkles size={13} /></IconButton>
             <IconButton label="Settings" onClick={() => { void window.clarityOverlay.openSettings(); }}><Settings size={13} /></IconButton>
             <IconButton label="Hide overlay" onClick={() => dispatch({ type: "HIDE" })}><X size={13} /></IconButton>
           </div>
@@ -373,7 +403,8 @@ function OverlayApp() {
             {capturingScreen ? <LoaderCircle className="spin" size={15} /> : <ImageIcon size={15} />}
           </IconButton>
           <button ref={modeButton} className={`mode-pill ${modePicker ? "is-active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={Boolean(modePicker)} aria-label={`Assistant mode: ${modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.label ?? "General"}`} onClick={() => void toggleModePicker()}><Grid2X2 size={12} /><span>{modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.shortLabel ?? "General"}</span><ChevronDown size={10} /></button>
-          <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch({ type: listening ? "STOP_LISTENING" : "START_LISTENING" })}>
+          {!listening && <select className="capture-source" aria-label="Meeting audio source" value={captureSource} onChange={(event) => setCaptureSource(event.target.value as typeof captureSource)}><option value="microphone">Mic</option><option value="system">System audio</option><option value="both">Both</option></select>}
+          <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch(listening ? { type: "STOP_LISTENING" } : { type: "START_LISTENING", source: captureSource })}>
             {listening ? <Square size={13} fill="currentColor" /> : <Mic size={15} />}
           </IconButton>
           {expanded
@@ -383,7 +414,7 @@ function OverlayApp() {
         </form>
       </div>
       {modePicker && modeModel && <ModePicker anchorElement={modeButton.current} model={modeModel} placement={modePicker.placement} viewportHeight={modePicker.viewportHeight} error={modeError} onClose={() => void closeModePicker()} onManage={() => void manageModes()} onSelect={(modeId) => void selectMode(modeId)} />}
-      {listening && !expanded && <span className="listening-ribbon"><MicOff size={11} /> Click stop to end capture</span>}
+      {listening && !expanded && <span className="listening-ribbon"><MicOff size={11} /> {state.meeting.status === "error" ? "Notes need attention" : "Live notes update after a speech pause"}</span>}
     </main>
   );
 }

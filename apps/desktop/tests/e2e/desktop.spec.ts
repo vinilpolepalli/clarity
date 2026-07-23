@@ -152,6 +152,36 @@ test("demo history materializes into a conversation that accepts follow-ups", as
   }
 });
 
+test("system-audio sessions continuously save live notes without a media URL", async () => {
+  test.setTimeout(60_000);
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("combobox", { name: "Meeting audio source" }).selectOption("system");
+    await overlay.getByRole("button", { name: "Start listening" }).click();
+    await expect(overlay.getByRole("button", { name: "Stop listening" })).toBeVisible();
+    expect((await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlay.meeting.source).toBe("system");
+    await overlay.waitForTimeout(400);
+
+    const speech = Array.from({ length: 32_000 }, () => 8);
+    const silence = Array.from({ length: 32_000 }, () => 0);
+    await overlay.evaluate(async ({ speech, silence }) => {
+      await window.clarityOverlay.testMeetingFrame!({ pcm: speech, source: "system" });
+      await window.clarityOverlay.testMeetingFrame!({ pcm: silence, source: "system" });
+    }, { speech, silence });
+
+    await overlay.getByRole("button", { name: "Live meeting notes" }).click();
+    await expect.poll(async () => (await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlay.phase).toBe("expanded-notes");
+    await expect(overlay.getByRole("heading", { name: /meeting notes/i })).toBeVisible();
+    await expect(overlay.getByText("Test meeting transcript: the team agreed to ship the live notes slice.").first()).toBeVisible();
+    await expect(overlay.getByText("Ship the live notes slice.", { exact: true })).toBeVisible();
+    await overlay.getByRole("button", { name: "Stop listening" }).click();
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
 test("fresh launch completes the split onboarding without forced permissions", async () => {
   const { application, userData } = await launch({ CLARITY_TEST_ONBOARDING: "1" });
   try {

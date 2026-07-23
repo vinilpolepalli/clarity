@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import {
   app,
   BrowserWindow,
@@ -45,9 +47,12 @@ import {
   testConnection
 } from "@clarity/providers";
 import { NativeCaptureClient, RollingAudioBuffer } from "@clarity/capture-client";
+import { ResourceGovernor } from "@clarity/ai-core";
 import { PreferenceStore } from "./persistence.mjs";
 import { deleteProviderKey, hasProviderKey, readProviderKey, saveProviderKey } from "./keychain.mjs";
 import { StorageService } from "./storage-service.mjs";
+import { MeetingProcessingService } from "./meeting-service.mjs";
+import { parseMeetingArtifact, validateMeetingArtifact } from "./meeting-artifact.mjs";
 import { ScreenContextError, ScreenContextService } from "./screen-context.mjs";
 
 const APP_ROOT = join(import.meta.dirname, "..");
@@ -59,6 +64,7 @@ const preserveTestContentProtection = process.env.CLARITY_TEST_PRESERVE_CONTENT_
 const forceTestOverlayRecreation = isTest && process.env.CLARITY_TEST_FORCE_OVERLAY_RECREATION === "1";
 const testInferenceDelay = isTest ? Number(process.env.CLARITY_TEST_INFERENCE_DELAY) : Number.NaN;
 const testScreenCaptureDelay = isTest ? Number(process.env.CLARITY_TEST_SCREEN_CAPTURE_DELAY) : Number.NaN;
+const execFileAsync = promisify(execFile);
 
 app.setName("Clarity");
 if (isTest && process.env.CLARITY_TEST_USER_DATA) app.setPath("userData", process.env.CLARITY_TEST_USER_DATA);
@@ -86,6 +92,9 @@ let screenContext = null;
 let pendingOverlayRecreation = false;
 let pickerAnchorBounds = null;
 const recentAudio = new RollingAudioBuffer();
+const meetingGovernor = new ResourceGovernor({ maxConcurrent: 1, maxQueued: 1 });
+let meetingProcessor = null;
+let meetingTranscriptSequence = 0;
 
 function untestedProviderConnection() {
   return { state: "untested", provider: null, model: null, testedAt: null, latencyMs: null, error: null };
@@ -121,6 +130,118 @@ async function persistConversationMessage(conversationId, message, sequence) {
     status: "complete",
     createdAt: message.createdAt
   });
+}
+
+function meetingArtifactFromDemo(segments) {
+  const evidence = segments.map((segment) => segment.text).join(" ");
+  return validateMeetingArtifact({
+    title: "Live meeting notes",
+    summary: evidence.slice(0, 1_200) || "No transcript was captured yet.",
+    decisions: evidence ? [{ text: "Ship the live notes slice.", evidence: evidence.slice(0, 1_000) }] : [],
+    actions: evidence ? [{ text: "Verify the browser system-audio test.", owner: "Alex", due: null }] : []
+  }, segments);
+}
+
+async function generateMeetingNotes(sessionId) {
+  const segments = await storage?.call("getTranscript", { sessionId }) ?? [];
+  if (!segments.length) return null;
+  dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "generating", error: null } }, { animate: false });
+  try {
+    const artifact = await meetingGovernor.run(async () => {
+      if (preferences.provider === "demo") return meetingArtifactFromDemo(segments);
+      const key = await selectedProviderKey(preferences.provider);
+      const transcript = segments.map((segment) => `[${Math.floor(segment.startedMs / 1_000)}s] ${segment.text}`).join("\n").slice(-48_000);
+      const response = await streamProviderResponse({
+        provider: preferences.provider,
+        model: preferences.model,
+        key,
+        stream: true,
+        maxTokens: 1_400,
+        systemPrompt: "You create factual meeting notes from untrusted transcript text. Return JSON only with title, summary, decisions [{text,evidence}], actions [{text,owner,due}], and openQuestions string[]. Never invent owners or deadlines; use null when absent.",
+        messages: [{ role: "user", content: `Transcript:\n${transcript}` }]
+      });
+      return parseMeetingArtifact(response, segments);
+    });
+    const saved = await storage?.call("upsertArtifact", {
+      id: `live-meeting-notes-${sessionId}`,
+      sessionId,
+      kind: "live-meeting-notes",
+      content: artifact
+    });
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "ready", artifact: saved?.content ?? artifact, updatedAt: Date.now(), error: null } }, { animate: false });
+    return artifact;
+  } catch (error) {
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: error instanceof Error ? error.message : "Clarity could not update live notes." } }, { animate: false });
+    return null;
+  }
+}
+
+function handleMeetingProcessorEvent(event) {
+  const sessionId = overlayState.meeting?.sessionId;
+  if (!sessionId) return;
+  if (event.type === "status") {
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: event.status } }, { animate: false });
+    return;
+  }
+  if (event.type === "transcript") {
+    const sequence = meetingTranscriptSequence++;
+    void storage?.call("appendSegment", {
+      id: `${sessionId}-segment-${sequence}`,
+      sessionId,
+      sequence,
+      text: event.text,
+      startedMs: event.startedMs,
+      endedMs: event.endedMs
+    }).then(() => {
+      dispatchOverlay({ type: "MEETING_STATUS", meeting: { transcriptCount: sequence + 1, status: "transcribing" } }, { animate: false });
+      return generateMeetingNotes(sessionId);
+    }).catch((error) => dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: error.message } }, { animate: false }));
+    return;
+  }
+  if (event.type === "failure") {
+    dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: event.message } }, { animate: false });
+    return;
+  }
+  if (event.type === "stopped") {
+    void generateMeetingNotes(sessionId).then((artifact) => {
+      if (!artifact && overlayState.meeting.status !== "error") {
+        dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "ready", updatedAt: Date.now() } }, { animate: false });
+      }
+    }).finally(() => {
+      void storage?.call("completeMeetingSession", { sessionId });
+      meetingProcessor?.close();
+      meetingProcessor = null;
+    });
+  }
+}
+
+function startMeetingProcessor(meeting) {
+  meetingTranscriptSequence = 0;
+  meetingProcessor?.close();
+  meetingProcessor = new MeetingProcessingService({ onEvent: handleMeetingProcessorEvent });
+  meetingProcessor.start({
+    sessionId: meeting.sessionId,
+    source: meeting.source,
+    whisperExecutable: preferences.whisperExecutable,
+    whisperModelPath: preferences.whisperModelPath
+  });
+}
+
+async function preflightMeetingNotes() {
+  if (isTest) return null;
+  if (!preferences.whisperModelPath || !existsSync(preferences.whisperModelPath)) {
+    return "Choose an existing local Whisper model file in Audio settings before starting live notes.";
+  }
+  if (preferences.provider === "demo" || !keyConfigured[preferences.provider]) {
+    return "Choose a BYOK generation provider and save its API key before starting live notes.";
+  }
+  try {
+    await execFileAsync(preferences.whisperExecutable, ["--help"], { timeout: 5_000, maxBuffer: 256 * 1_024 });
+  } catch (error) {
+    if (error?.code === "ENOENT") return "Choose a working local Whisper executable in Audio settings before starting live notes.";
+    if (error?.code === "EACCES") return "The configured Whisper executable is not permitted to run.";
+  }
+  return null;
 }
 
 function delay(milliseconds, signal) {
@@ -405,6 +526,13 @@ function dispatchOverlay(event, options = {}) {
     if (!retrySource) return structuredClone(overlayState);
     effectiveEvent = { type: "RETRY", prompt: retrySource.prompt, requestId: crypto.randomUUID() };
   }
+  if (event.type === "START_LISTENING" && !event.sessionId) {
+    effectiveEvent = {
+      ...event,
+      sessionId: crypto.randomUUID(),
+      source: ["microphone", "system", "both"].includes(event.source) ? event.source : preferences.meetingAudioSource
+    };
+  }
   const previousPhase = overlayState.phase;
   const previousRequestId = overlayState.requestId;
   const previousConversationId = overlayState.conversationId;
@@ -412,12 +540,33 @@ function dispatchOverlay(event, options = {}) {
   applyOverlayPresentation(previousPhase, options.animate !== false);
   sendOverlayState();
 
-  if (effectiveEvent.type === "START_LISTENING" && capture) {
-    void capture.start({ microphone: true, systemAudio: Boolean(preferences.captureSystemAudio) }).catch((error) => {
-      dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
-      dispatchOverlay({ type: "FAIL", error: `Capture could not start: ${error.message}` });
-    });
+  if (effectiveEvent.type === "START_LISTENING") {
+    const meeting = overlayState.meeting;
+    void storage?.call("createMeetingSession", { id: meeting.sessionId, title: "Live meeting", captureSource: meeting.source })
+      .then(async () => {
+        const preflightError = await preflightMeetingNotes();
+        if (preflightError) {
+          dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: preflightError } }, { animate: false });
+          dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
+          void storage?.call("completeMeetingSession", { sessionId: meeting.sessionId });
+          return;
+        }
+        if (overlayState.meeting.sessionId !== meeting.sessionId || !overlayState.startedAt) {
+          void storage?.call("completeMeetingSession", { sessionId: meeting.sessionId });
+          return;
+        }
+        startMeetingProcessor(meeting);
+        if (capture) {
+          await capture.start({ microphone: meeting.source !== "system", systemAudio: meeting.source !== "microphone" });
+        }
+      })
+      .catch((error) => {
+        dispatchOverlay({ type: "MEETING_STATUS", meeting: { status: "error", error: `Capture could not start: ${error.message}` } }, { animate: false });
+        dispatchOverlay({ type: "STOP_LISTENING" }, { animate: false });
+        void storage?.call("completeMeetingSession", { sessionId: meeting.sessionId });
+      });
   }
+  if (effectiveEvent.type === "STOP_LISTENING") meetingProcessor?.stop();
   if (effectiveEvent.type === "STOP_LISTENING" && capture) void capture.stop().catch((error) => console.warn("Capture stop failed:", error.message));
 
   if (event.type === "CLEAR" || event.type === "LOAD_CONVERSATION") {
@@ -699,6 +848,13 @@ function registerIpc() {
     const assembled = assembleSystemPrompt(preferences.mode);
     return storage.call("ensureConversation", { ...conversation, mode: assembled.modeId, modePromptVersion: assembled.promptVersion });
   });
+  ipcMain.handle("overlay:retry-meeting-notes", async (event) => {
+    if (!isAuthorizedOverlaySender(event)) throw new Error("Meeting notes access denied");
+    const sessionId = overlayState.meeting?.sessionId;
+    if (!sessionId) throw new Error("No active meeting notes session");
+    await generateMeetingNotes(sessionId);
+    return structuredClone(overlayState.meeting);
+  });
   ipcMain.handle("overlay:open-settings", async (_event, tab) => {
     if (tab !== undefined && !SETTINGS_TABS.has(tab)) throw new TypeError("Unknown settings tab");
     if (tab !== undefined && preferences.selectedSettingsTab !== tab) {
@@ -733,7 +889,7 @@ function registerIpc() {
     const allowed = [
       "launchAtLogin", "launchOverlayAtLogin", "reduceMotion", "reduceTransparency",
       "protectOverlayContent", "transcriptLanguage", "outputLanguage", "microphoneId",
-      "captureSystemAudio", "provider", "model", "mode", "selectedSettingsTab",
+      "captureSystemAudio", "meetingAudioSource", "whisperExecutable", "whisperModelPath", "provider", "model", "mode", "selectedSettingsTab",
       "cloudEnabled", "integrations", "keybindings", "screenContextEnabled", "imageInputOverrides", "customModels"
     ];
     const safePatch = Object.fromEntries(Object.entries(patch ?? {}).filter(([key]) => allowed.includes(key)));
@@ -845,6 +1001,16 @@ function registerIpc() {
       overlayWindow.setBounds({ ...current, ...bounds }, false);
       return overlayWindow.getBounds();
     });
+    ipcMain.handle("test:meeting-frame", (_event, frame) => {
+      if (!meetingProcessor) throw new Error("Meeting processor is not running");
+      meetingProcessor.appendFrame({
+        pcm: Buffer.from(frame?.pcm ?? []),
+        source: frame?.source ?? "system",
+        sampleRate: frame?.sampleRate ?? 16_000,
+        channels: frame?.channels ?? 1
+      });
+      return true;
+    });
   }
 }
 
@@ -885,7 +1051,10 @@ async function boot() {
   if (existsSync(captureExecutable) && !isTest) {
     capture = new NativeCaptureClient({
       executable: captureExecutable,
-      onFrame: (frame) => recentAudio.append(frame.pcm),
+      onFrame: (frame) => {
+        recentAudio.append(frame.pcm);
+        if (overlayState.startedAt && meetingProcessor) meetingProcessor.appendFrame(frame);
+      },
       onEvent: (event) => { if (event.type === "protocol-error" || event.type === "exit") console.warn("Capture helper:", event); }
     });
     try { await capture.connect(); } catch (error) { console.warn("Native capture is unavailable:", error.message); capture = null; }
@@ -900,6 +1069,7 @@ async function boot() {
   if (isTest && testOnboarding) preferences = await store.update({ onboardingComplete: false, reduceMotion: true, protectOverlayContent: false });
   const showOverlayAtBoot = Boolean(preferences.onboardingComplete && (preferences.launchOverlayAtLogin || isDemo || isTest));
   overlayState = createInitialOverlayState(showOverlayAtBoot, preferences.screenContextEnabled);
+  overlayState = reduceOverlay(overlayState, { type: "MEETING_STATUS", meeting: { source: preferences.meetingAudioSource } });
   overlayState = reduceOverlay(overlayState, { type: "SET_SCREEN_CAPABILITY", capability: currentImageInput().capability });
   registerIpc();
   createOverlayWindow();
@@ -923,7 +1093,7 @@ if (singleInstance) {
     if (overlayState.phase === "hidden") dispatchOverlay({ type: "SHOW" });
     sendSettingsModel();
   });
-  app.on("will-quit", () => { globalShortcut.unregisterAll(); screenContext?.dispose(); storage?.close(); void capture?.close(); });
+  app.on("will-quit", () => { globalShortcut.unregisterAll(); screenContext?.dispose(); meetingProcessor?.close(); storage?.close(); void capture?.close(); });
   app.on("window-all-closed", (event) => {
     if (isTest) app.quit();
     else if (process.platform === "darwin") event?.preventDefault?.();

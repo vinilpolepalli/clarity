@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const allowedActions = new Set([
   "SHOW", "HIDE", "TOGGLE_VISIBILITY", "SET_PROMPT", "SUBMIT", "EXPAND", "COLLAPSE",
-  "START_LISTENING", "STOP_LISTENING", "SHOW_HISTORY", "LOAD_CONVERSATION", "RETRY", "CLEAR",
+  "START_LISTENING", "STOP_LISTENING", "SHOW_HISTORY", "SHOW_LIVE_NOTES", "LOAD_CONVERSATION", "RETRY", "CLEAR",
   "SET_SCREEN_CONTEXT_ENABLED"
 ]);
 
@@ -21,6 +21,7 @@ const overlayBridge = {
   openSettings: (tab) => ipcRenderer.invoke("overlay:open-settings", tab),
   openModelSettings: () => ipcRenderer.invoke("overlay:open-model-settings"),
   getScreenPreview: (attachmentId) => ipcRenderer.invoke("overlay:get-screen-preview", attachmentId),
+  retryMeetingNotes: () => ipcRenderer.invoke("overlay:retry-meeting-notes"),
   openScreenPermissionSettings: () => ipcRenderer.invoke("overlay:open-screen-permission-settings"),
   recheckScreenPermission: () => ipcRenderer.invoke("overlay:recheck-screen-permission"),
   onState: (listener) => {
@@ -43,6 +44,7 @@ const overlayBridge = {
 if (process.env.CLARITY_TEST === "1") {
   overlayBridge.testSnapshot = () => ipcRenderer.invoke("test:snapshot");
   overlayBridge.testSetBounds = (bounds) => ipcRenderer.invoke("test:set-bounds", bounds);
+  overlayBridge.testMeetingFrame = (frame) => ipcRenderer.invoke("test:meeting-frame", frame);
 }
 
 contextBridge.exposeInMainWorld("clarityOverlay", Object.freeze(overlayBridge));

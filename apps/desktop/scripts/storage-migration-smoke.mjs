@@ -28,7 +28,8 @@ try {
   initializeStorageDatabase(legacy);
   initializeStorageDatabase(legacy);
   assert.deepEqual({ ...legacy.prepare("SELECT mode, mode_prompt_version FROM sessions WHERE id = ?").get("legacy") }, { mode: "lecture", mode_prompt_version: 0 });
-  assert.equal(legacy.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version, 3);
+  assert.equal(legacy.prepare("SELECT MAX(version) AS version FROM schema_migrations").get().version, 4);
+  assert.equal(legacy.prepare("PRAGMA table_info(sessions)").all().some((column) => column.name === "capture_source"), true);
   legacy.close();
 
   console.log("Storage migration smoke passed");

@@ -1,4 +1,4 @@
-/** @typedef {'hidden'|'compact-idle'|'compact-listening'|'expanded-empty'|'expanded-response'|'expanded-error'|'expanded-history'} OverlayPhase */
+/** @typedef {'hidden'|'compact-idle'|'compact-listening'|'expanded-empty'|'expanded-response'|'expanded-error'|'expanded-history'|'expanded-notes'} OverlayPhase */
 
 import { isModeId } from "./modes.mjs";
 
@@ -21,7 +21,8 @@ export const OVERLAY_PHASES = Object.freeze([
   "expanded-empty",
   "expanded-response",
   "expanded-error",
-  "expanded-history"
+  "expanded-history",
+  "expanded-notes"
 ]);
 
 export const DEFAULT_PROVIDER_MODELS = Object.freeze({
@@ -43,6 +44,9 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   outputLanguage: "English",
   microphoneId: "default",
   captureSystemAudio: true,
+  meetingAudioSource: "both",
+  whisperExecutable: "whisper-cli",
+  whisperModelPath: "",
   screenContextEnabled: false,
   provider: "demo",
   model: "clarity-demo",
@@ -102,6 +106,15 @@ export function createInitialOverlayState(visible = true, screenContextEnabled =
     activeAssistantMessageId: null,
     lastPrompt: "",
     startedAt: null,
+    meeting: {
+      sessionId: null,
+      source: "both",
+      status: "idle",
+      transcriptCount: 0,
+      artifact: null,
+      updatedAt: null,
+      error: null
+    },
     screenContext: {
       enabled: Boolean(screenContextEnabled),
       status: "idle",
@@ -155,7 +168,14 @@ export function mergePreferences(value) {
       return [provider, normalized];
     }))
   };
-  return { ...merged, mode: isModeId(merged.mode) ? merged.mode : "general" };
+  const meetingAudioSource = ["microphone", "system", "both"].includes(merged.meetingAudioSource) ? merged.meetingAudioSource : "both";
+  return {
+    ...merged,
+    meetingAudioSource,
+    whisperExecutable: String(merged.whisperExecutable ?? "whisper-cli").trim().slice(0, 1_000) || "whisper-cli",
+    whisperModelPath: String(merged.whisperModelPath ?? "").trim().slice(0, 4_000),
+    mode: isModeId(merged.mode) ? merged.mode : "general"
+  };
 }
 
 export function reduceOverlay(state, event) {
@@ -302,12 +322,28 @@ export function reduceOverlay(state, event) {
     }
     case "EXPAND":
       return { ...state, phase: state.messages.length ? "expanded-response" : "expanded-empty" };
+    case "SHOW_LIVE_NOTES":
+      return { ...state, phase: "expanded-notes", selectedHistoryId: null, error: null };
     case "COLLAPSE":
       return { ...state, phase: state.startedAt ? "compact-listening" : "compact-idle", error: null, selectedHistoryId: null };
-    case "START_LISTENING":
-      return { ...state, phase: isExpandedPhase(state.phase) ? state.phase : "compact-listening", startedAt: state.startedAt ?? Date.now() };
+    case "START_LISTENING": {
+      const source = ["microphone", "system", "both"].includes(event.source) ? event.source : "both";
+      return {
+        ...state,
+        phase: isExpandedPhase(state.phase) ? state.phase : "compact-listening",
+        startedAt: state.startedAt ?? Date.now(),
+        meeting: { sessionId: String(event.sessionId ?? crypto.randomUUID()), source, status: "listening", transcriptCount: 0, artifact: null, updatedAt: null, error: null }
+      };
+    }
     case "STOP_LISTENING":
-      return { ...state, phase: isExpandedPhase(state.phase) ? state.phase : "compact-idle", startedAt: null };
+      return {
+        ...state,
+        phase: isExpandedPhase(state.phase) ? state.phase : "compact-idle",
+        startedAt: null,
+        meeting: { ...state.meeting, status: state.meeting.status === "error" ? "error" : state.meeting.sessionId ? "finalizing" : "idle" }
+      };
+    case "MEETING_STATUS":
+      return { ...state, meeting: { ...state.meeting, ...event.meeting } };
     case "SHOW_HISTORY":
       return { ...state, phase: "expanded-history", selectedHistoryId: null, error: null };
     case "LOAD_CONVERSATION": {

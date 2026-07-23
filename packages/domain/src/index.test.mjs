@@ -63,6 +63,13 @@ describe("overlay reducer", () => {
     expect(reduceOverlay(state, { type: "COLLAPSE" }).phase).toBe("compact-listening");
   });
 
+  it("tracks a source-selected live-notes session without replacing chat state", () => {
+    let state = reduceOverlay(createInitialOverlayState(true), { type: "START_LISTENING", sessionId: "meeting-1", source: "system" });
+    state = reduceOverlay(state, { type: "MEETING_STATUS", meeting: { transcriptCount: 2, status: "ready", artifact: { title: "Notes", summary: "Done", decisions: [], actions: [] } } });
+    state = reduceOverlay(state, { type: "SHOW_LIVE_NOTES" });
+    expect(state).toMatchObject({ phase: "expanded-notes", meeting: { sessionId: "meeting-1", source: "system", transcriptCount: 2, status: "ready" } });
+  });
+
   it("keeps screen opt-in across clear while dropping attachment metadata", () => {
     let state = createInitialOverlayState(true, true);
     state = reduceOverlay(state, { type: "SUBMIT", prompt: "screen", requestId: "current" });
@@ -116,7 +123,14 @@ describe("portable contracts", () => {
     expect(preferences.screenContextEnabled).toBe(false);
     expect(preferences.imageInputOverrides).toEqual({});
     expect(preferences.customModels.nvidia).toEqual([]);
+    expect(preferences.meetingAudioSource).toBe("both");
+    expect(preferences.whisperExecutable).toBe("whisper-cli");
     expect(DEFAULT_PROVIDER_MODELS.nvidia).toBe("deepseek-ai/deepseek-v4-flash");
+  });
+
+  it("rejects an invalid persisted meeting audio source", () => {
+    expect(mergePreferences({ meetingAudioSource: "browser" }).meetingAudioSource).toBe("both");
+    expect(mergePreferences({ meetingAudioSource: "system" }).meetingAudioSource).toBe("system");
   });
 
   it("normalizes saved custom provider models", () => {

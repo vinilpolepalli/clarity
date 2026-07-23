@@ -23,6 +23,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@clarity/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
       '@clarity/capture-client':
         specifier: workspace:*
         version: link:../../packages/capture-client

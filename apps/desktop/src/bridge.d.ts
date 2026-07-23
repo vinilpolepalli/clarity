@@ -5,7 +5,8 @@ export type OverlayPhase =
   | "expanded-empty"
   | "expanded-response"
   | "expanded-error"
-  | "expanded-history";
+  | "expanded-history"
+  | "expanded-notes";
 
 export interface OverlayState {
   version: 2;
@@ -22,6 +23,15 @@ export interface OverlayState {
   activeAssistantMessageId: string | null;
   lastPrompt: string;
   startedAt: number | null;
+  meeting: {
+    sessionId: string | null;
+    source: "microphone" | "system" | "both";
+    status: "idle" | "listening" | "transcribing" | "generating" | "ready" | "finalizing" | "error";
+    transcriptCount: number;
+    artifact: MeetingArtifact | null;
+    updatedAt: number | null;
+    error: string | null;
+  };
   screenContext: {
     enabled: boolean;
     status: "idle" | "capturing" | "attached" | "permission-blocked" | "unsupported" | "error";
@@ -32,6 +42,14 @@ export interface OverlayState {
     errorCode: string | null;
     error: string | null;
   };
+}
+
+export interface MeetingArtifact {
+  title: string;
+  summary: string;
+  decisions: Array<{ text: string; evidence: string }>;
+  actions: Array<{ text: string; owner: string | null; due: string | null }>;
+  openQuestions?: string[];
 }
 
 export interface ConversationMessage {
@@ -90,6 +108,9 @@ export interface Preferences {
   outputLanguage: string;
   microphoneId: string;
   captureSystemAudio: boolean;
+  meetingAudioSource: "microphone" | "system" | "both";
+  whisperExecutable: string;
+  whisperModelPath: string;
   screenContextEnabled: boolean;
   provider: string;
   model: string;
@@ -158,6 +179,7 @@ declare global {
       openSettings(tab?: string): Promise<boolean>;
       openModelSettings(): Promise<boolean>;
       getScreenPreview(attachmentId: string): Promise<{ mediaType: "image/png" | "image/jpeg"; bytes: Uint8Array } | null>;
+      retryMeetingNotes(): Promise<OverlayState["meeting"]>;
       openScreenPermissionSettings(): Promise<boolean>;
       recheckScreenPermission(): Promise<string>;
       onState(listener: (state: OverlayState) => void): () => void;
@@ -165,6 +187,7 @@ declare global {
       onPickerClosed(listener: () => void): () => void;
       testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel; contentProtected: boolean; resizable: boolean; windowId: number | null; pickerOpen: boolean; activeRequest: { requestId: string; modeId: string; promptVersion: number } | null; failedRequest: { modeId: string; promptVersion: number } | null }>;
       testSetBounds?(bounds: Partial<{ x: number; y: number; width: number; height: number }>): Promise<{ x: number; y: number; width: number; height: number }>;
+      testMeetingFrame?(frame: { pcm: number[]; source?: "microphone" | "system"; sampleRate?: number; channels?: number }): Promise<boolean>;
     };
     claritySettings: {
       getModel(): Promise<SettingsModel>;
