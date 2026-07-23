@@ -1,7 +1,7 @@
-export const COMPACT_HEIGHT = 88;
-export const DEFAULT_OVERLAY_WIDTH = 590;
+export const COMPACT_HEIGHT = 104;
+export const DEFAULT_OVERLAY_WIDTH = 680;
 export const MIN_OVERLAY_WIDTH = 420;
-export const MAX_OVERLAY_WIDTH = 760;
+export const MAX_OVERLAY_WIDTH = 840;
 export const DEFAULT_EXPANDED_HEIGHT = 414;
 export const MIN_EXPANDED_HEIGHT = 300;
 

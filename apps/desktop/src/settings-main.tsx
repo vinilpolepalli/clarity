@@ -179,6 +179,8 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
   const discoveryRevision = useRef(0);
   const provider = preferences.provider;
   const needsKey = provider !== "demo";
+  const imageCapabilityLabel = model.imageInput.capability === "supported" ? "Supported" : model.imageInput.capability === "unsupported" ? "Not supported" : "Unverified";
+  const showImageOverride = model.imageInput.capability === "unknown" || model.imageInput.explicitOverride !== null;
   const hostedProvider = provider as keyof Preferences["customModels"];
   const savedCustomModels = preferences.customModels[hostedProvider] ?? [];
   const connection = model.providerConnection;
@@ -253,6 +255,13 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
     setModel(await window.claritySettings.testProviderConnection());
   }
 
+  async function setImageOverride(enabled: boolean) {
+    const next = { ...preferences.imageInputOverrides };
+    if (enabled) next[model.imageInput.overrideKey] = true;
+    else delete next[model.imageInput.overrideKey];
+    await update({ imageInputOverrides: next });
+  }
+
   const testedTime = connection.testedAt
     ? new Date(connection.testedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : null;
@@ -270,6 +279,8 @@ function ModelsPage({ preferences, model, update, setModel }: PageProps) {
     <Section title="Provider">
       <SettingRow icon={<WandSparkles size={16} />} title="Inference provider" description="The demo provider is deterministic and works offline."><Select label="Provider" value={provider} onChange={(value) => update({ provider: value, model: model.defaultProviderModels[value] })} options={[{ value: "demo", label: "Clarity Demo" }, { value: "nvidia", label: "NVIDIA NIM" }, { value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }]} /></SettingRow>
       <SettingRow icon={<Sparkles size={16} />} title="Model" description="Curated models appear in Clarity's preferred order; refreshed and custom models follow."><span className="model-picker-actions"><Select label="Model" value={preferences.model} onChange={(value) => update({ model: value })} options={modelOptions} />{needsKey && model.providerCatalog.discoverySupported && <button className="secondary-button compact-button" type="button" disabled={!model.keyConfigured[provider] || discoveryState === "loading"} onClick={refreshModels}><RefreshCw className={discoveryState === "loading" ? "spin" : ""} size={13} />{discoveryState === "loading" ? "Refreshing" : "Refresh"}</button>}</span></SettingRow>
+      <SettingRow icon={<MonitorUp size={16} />} title="Image input" description="Screen context is sent only when this endpoint and model are authorized."><span className={`capability-badge is-${model.imageInput.capability}`}>{imageCapabilityLabel}</span></SettingRow>
+      {showImageOverride && <SettingRow icon={<ShieldCheck size={16} />} title="This model accepts image inputs" description="Confirm only if this exact provider endpoint documents image support."><Toggle label="This model accepts image inputs" checked={model.imageInput.explicitOverride === true} onChange={setImageOverride} /></SettingRow>}
       {needsKey && <div className="custom-model-panel"><div><input className="settings-input" value={customModel} onChange={(event) => setCustomModel(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void addCustomModel(); }} placeholder="publisher/model-id" aria-label="Custom model ID" /><button className="secondary-button" type="button" disabled={!customModel.trim()} onClick={addCustomModel}>Add custom model</button></div>{savedCustomModels.length > 0 && <div className="custom-model-list" aria-label="Saved custom models">{savedCustomModels.map((id) => <span key={id}><small title={id}>{id}</small><button type="button" aria-label={`Remove ${id}`} onClick={() => removeCustomModel(id)}><X size={11} /></button></span>)}</div>}{discoveryMessage && <p className={discoveryState === "error" ? "is-error" : ""}>{discoveryMessage}</p>}</div>}
     </Section>
     {needsKey && <Section title="Provider key" description="Clarity stores this secret directly in macOS Keychain. It is never written to preferences or logs.">
@@ -389,7 +400,7 @@ function CloudPage({ preferences, update }: PageProps) {
 }
 
 function PrivacyPage({ preferences, update }: PageProps) {
-  return <><PageTitle eyebrow="Best-effort protection" title="Privacy" description="Clarity minimizes exposure and explains OS limits honestly. No desktop app can guarantee invisibility." /><Section title="Overlay protection"><SettingRow icon={<ShieldCheck size={16} />} title="Hide overlay from screen sharing (best effort)" description="When on, Clarity asks macOS to omit the overlay from supported captures. Turn it off when you want to share the overlay. Some ScreenCaptureKit apps and external cameras may still record it."><Toggle label="Hide overlay from screen sharing (best effort)" checked={preferences.protectOverlayContent} onChange={(value) => update({ protectOverlayContent: value })} /></SettingRow></Section><Section title="Local data"><SettingRow icon={<Laptop size={16} />} title="Session storage" description="Transcripts, answers, and search index live in your user data directory."><span className="local-badge">On this Mac</span></SettingRow><SettingRow icon={<RotateCcw size={16} />} title="Retention" description="Automatic deletion policy for completed sessions."><Select label="Retention" value="forever" onChange={() => {}} options={[{ value: "forever", label: "Keep until deleted" }, { value: "30", label: "30 days" }, { value: "7", label: "7 days" }]} /></SettingRow></Section></>;
+  return <><PageTitle eyebrow="Best-effort protection" title="Privacy" description="Clarity minimizes exposure and explains OS limits honestly. No desktop app can guarantee invisibility." /><Section title="Overlay protection"><SettingRow icon={<ShieldCheck size={16} />} title="Hide overlay from screen sharing (best effort)" description="When on, Clarity asks macOS to omit the overlay from supported captures. Turn it off when you want to share the overlay. Some ScreenCaptureKit apps and external cameras may still record it."><Toggle label="Hide overlay from screen sharing (best effort)" checked={preferences.protectOverlayContent} onChange={(value) => update({ protectOverlayContent: value })} /></SettingRow><SettingRow icon={<MonitorUp size={16} />} title="Use screen context for questions" description="When enabled, each question captures the display containing Clarity and sends it to the selected BYOK vision provider. Screenshots stay in memory and are not saved to history."><Toggle label="Use screen context for questions" checked={preferences.screenContextEnabled} onChange={(value) => update({ screenContextEnabled: value })} /></SettingRow></Section><Section title="Local data"><SettingRow icon={<Laptop size={16} />} title="Session storage" description="Transcripts, answers, and search index live in your user data directory."><span className="local-badge">On this Mac</span></SettingRow><SettingRow icon={<RotateCcw size={16} />} title="Retention" description="Automatic deletion policy for completed sessions."><Select label="Retention" value="forever" onChange={() => {}} options={[{ value: "forever", label: "Keep until deleted" }, { value: "30", label: "30 days" }, { value: "7", label: "7 days" }]} /></SettingRow></Section><div className="callout warning"><MonitorUp size={17} /><div><strong>Screen pixels are not stored by default</strong><p>Screen Recording permission is used for system audio and for screen-context questions you explicitly enable. Denial leaves the rest of the app usable.</p></div></div></>;
 }
 
 function IntegrationsPage({ preferences, update }: PageProps) {

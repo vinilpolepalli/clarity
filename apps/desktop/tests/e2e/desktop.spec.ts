@@ -34,8 +34,8 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     const overlay = await pageByTitle(application, "Clarity Overlay");
     await expect(overlay.locator("[data-phase='compact-idle']")).toBeVisible();
     const compact = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
-    expect(compact.bounds.width).toBe(590);
-    expect(compact.bounds.height).toBe(88);
+    expect(compact.bounds.width).toBe(680);
+    expect(compact.bounds.height).toBe(104);
     await expect(overlay).toHaveScreenshot("overlay-compact.png");
 
     await overlay.getByRole("button", { name: "Expand" }).click();
@@ -91,12 +91,13 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     await settings.getByRole("combobox", { name: "Provider" }).selectOption("nvidia");
     const modelPicker = settings.getByRole("combobox", { name: "Model" });
     const preferredModels = await modelPicker.locator("option").allTextContents();
-    expect(preferredModels.slice(0, 5)).toEqual([
+    expect(preferredModels.slice(0, 6)).toEqual([
       "DeepSeek V4 Flash · #1 Recommended · Best balance",
       "GPT OSS 20B · #2 Fastest · Reasoning",
       "GLM 5.2 · #3 Best quality · Slower",
       "Nemotron 3 Nano 30B · #4 Fast · NVIDIA",
-      "Llama 3.1 8B Instruct · #5 Lightweight · Fast"
+      "Llama 3.1 8B Instruct · #5 Lightweight · Fast",
+      "Llama 3.2 11B Vision · Vision · Screen context"
     ]);
     await expect(settings.getByRole("button", { name: "Refresh" })).toBeDisabled();
     await expect(settings.getByRole("button", { name: "Test connection" })).toBeDisabled();
@@ -120,7 +121,7 @@ test("overlay preserves its anchor, reflows, and keeps settings separate", async
     await overlay.getByRole("button", { name: "Collapse" }).click();
     const collapsed = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
     expect(collapsed.bounds.width).toBe(430);
-    expect(collapsed.bounds.height).toBe(88);
+    expect(collapsed.bounds.height).toBe(104);
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });
