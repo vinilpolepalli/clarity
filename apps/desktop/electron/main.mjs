@@ -30,6 +30,7 @@ import {
 } from "@clarity/domain";
 import {
   COMPACT_HEIGHT,
+  DEFAULT_OVERLAY_WIDTH,
   boundsEqual,
   defaultCompactBounds,
   pickerPresentationBounds,
@@ -478,6 +479,10 @@ function rememberedGeometry() {
     compactWidth: preferences.overlayCompactBounds?.width,
     expandedHeight: preferences.overlayExpandedBounds?.height
   };
+}
+
+function hasLegacyDefaultCompactBounds(bounds) {
+  return Number(bounds?.width) === 590 && Number(bounds?.height) === 88;
 }
 
 function applyOverlayPresentation(previousPhase, animate = true) {
@@ -1043,6 +1048,15 @@ async function boot() {
   nativeTheme.themeSource = "dark";
   store = new PreferenceStore(join(app.getPath("userData"), isTest ? "preferences.test.json" : "preferences.json"));
   preferences = await store.load();
+  if (hasLegacyDefaultCompactBounds(preferences.overlayCompactBounds)) {
+    preferences = await store.update({
+      overlayCompactBounds: {
+        ...preferences.overlayCompactBounds,
+        width: DEFAULT_OVERLAY_WIDTH,
+        height: COMPACT_HEIGHT
+      }
+    });
+  }
   storage = new StorageService({ directory: join(app.getPath("userData"), "local-data") });
   await storage.start();
   const captureExecutable = app.isPackaged
