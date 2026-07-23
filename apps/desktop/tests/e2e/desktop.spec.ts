@@ -233,9 +233,16 @@ test("screen context persists, discloses its preview, and expires on clear", asy
     const attachmentId = attached.overlay.screenContext.attachmentId;
     expect(attachmentId).toBeTruthy();
 
+    await expect(overlay).toHaveScreenshot("overlay-screen-disclosure.png");
+
     await viewedScreen.hover();
     await expect(overlay.getByRole("dialog", { name: "Screen used for this response" })).toBeVisible();
     await expect(overlay.getByAltText("Screen captured for this response")).toBeVisible();
+
+    await viewedScreen.focus();
+    await expect(overlay.getByRole("dialog", { name: "Screen used for this response" })).toBeVisible();
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).focus();
+    await expect(overlay.getByRole("dialog", { name: "Screen used for this response" })).toBeHidden();
 
     await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("What changed since the first screenshot?");
     await overlay.getByRole("button", { name: "Send" }).click();
