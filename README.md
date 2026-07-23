@@ -2,6 +2,12 @@
 
 Clarity is a local-first macOS meeting copilot. It provides a compact, always-on-top assistant for questions, meeting notes, screen-aware prompts, and local conversation history—without requiring an account for core use.
 
+## Inspiration and attribution
+
+Clarity is an independent open-source implementation, inspired by the interaction model of [Cluely](https://cluely.com/) and by the Electron/macOS architecture explored in [cue](https://github.com/Blueturboguy07/cue). Those projects informed the product direction and technical study behind this repository.
+
+Clarity does not claim affiliation with either project. Its code, UI, privacy model, storage layer, provider adapters, and native capture pipeline are maintained independently in this repository under the [AGPL-3.0-only license](LICENSE).
+
 ## Highlights
 
 - Local-first by default: conversations, transcripts, search, and settings stay on your Mac.
