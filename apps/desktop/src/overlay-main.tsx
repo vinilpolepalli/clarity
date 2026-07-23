@@ -8,8 +8,6 @@ import {
   Copy,
   Grid2X2,
   History,
-  Image as ImageIcon,
-  LoaderCircle,
   MessageSquarePlus,
   Mic,
   MicOff,
@@ -54,88 +52,18 @@ function ResponseBody({ text }: { text: string }) {
   );
 }
 
-function ViewedScreen({ state }: { state: OverlayState }) {
-  const attachmentId = state.screenContext.attachmentId;
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
-
-  useEffect(() => {
-    setOpen(false);
-    setUnavailable(false);
-    setPreviewUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
-  }, [attachmentId]);
-
-  useEffect(() => () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
-
-  async function showPreview() {
-    if (!attachmentId) return;
-    setOpen(true);
-    if (previewUrl || loading || unavailable) return;
-    setLoading(true);
-    try {
-      const preview = await window.clarityOverlay.getScreenPreview(attachmentId);
-      if (!preview) {
-        setUnavailable(true);
-        return;
-      }
-      const bytes = new Uint8Array(preview.bytes);
-      setPreviewUrl(URL.createObjectURL(new Blob([bytes], { type: preview.mediaType })));
-    } catch {
-      setUnavailable(true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  if (!attachmentId) return null;
-  const timestamp = state.screenContext.capturedAt ? new Date(state.screenContext.capturedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "Just now";
-  return (
-    <div className="screen-disclosure" onMouseEnter={() => void showPreview()} onMouseLeave={() => setOpen(false)}>
-      <button type="button" onFocus={() => void showPreview()} onBlur={() => setOpen(false)} onClick={() => void showPreview()} aria-expanded={open}>
-        <ImageIcon size={12} /> Viewed screen
-      </button>
-      {open && (
-        <div className="screen-preview-popover" role="dialog" aria-label="Screen used for this response">
-          <div className="screen-preview-frame">
-            {loading && <span className="screen-preview-message"><LoaderCircle className="spin" size={16} /> Loading preview…</span>}
-            {unavailable && <span className="screen-preview-message">Preview is no longer available.</span>}
-            {previewUrl && <img src={previewUrl} alt="Screen captured for this response" />}
-          </div>
-          <footer><span>{timestamp}</span><span>Not saved to history</span></footer>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ConversationTurn({ message, state, isLatestAssistant, retry }: { message: ConversationMessage; state: OverlayState; isLatestAssistant: boolean; retry: () => void }) {
+function ConversationTurn({ message, state, retry }: { message: ConversationMessage; state: OverlayState; retry: () => void }) {
   if (message.role === "user") return <div className="chat-turn user-turn"><div className="user-bubble">{message.content}</div></div>;
   const streamingEmpty = message.status === "streaming" && !message.content;
-  const viewedCurrentScreen = isLatestAssistant && Boolean(state.screenContext.attachmentId);
   return (
     <div className={`chat-turn assistant-turn ${message.status === "error" ? "has-error" : ""}`}>
       <div className="assistant-meta"><span className="assistant-avatar"><BrandMark size={18} /></span><strong>Clarity</strong>{message.status === "streaming" && <small>Thinking…</small>}</div>
       {streamingEmpty
         ? <div className="typing-indicator" aria-label="Clarity is thinking"><i /><i /><i /></div>
         : message.content && <ResponseBody text={message.content} />}
-      {viewedCurrentScreen && <ViewedScreen state={state} />}
       {message.status === "error" && (
         <div className="turn-error">
           <p>{state.error ?? "Clarity couldn’t finish that response."}</p>
-          {state.screenContext.status === "permission-blocked" && ["permission-denied", "permission-not-granted"].includes(state.screenContext.errorCode ?? "") && <button className="secondary-button" type="button" onClick={() => void window.clarityOverlay.openScreenPermissionSettings()}>Open Screen Recording Settings</button>}
-          {state.screenContext.status === "permission-blocked" && <button className="secondary-button" type="button" onClick={async () => {
-            const permission = await window.clarityOverlay.recheckScreenPermission();
-            if (permission === "granted") retry();
-          }}>Recheck permission</button>}
-          {state.screenContext.errorCode === "permission-restricted" && <p className="screen-remediation">This Mac is managed. Ask the device administrator to allow Screen Recording, then try again.</p>}
-          {state.screenContext.status === "unsupported" && <button className="secondary-button" type="button" onClick={() => void window.clarityOverlay.openModelSettings()}>Choose a vision model</button>}
           <button className="secondary-button" type="button" onClick={retry}><RotateCcw size={14} /> Try again</button>
         </div>
       )}
@@ -197,7 +125,7 @@ function ExpandedBody({
         {loading ? (
           <div className="thinking-state">
             <span className="thinking-mark"><BrandMark size={24} /></span>
-            <div><span className="eyebrow">{state.screenContext.status === "capturing" ? "Capturing current display" : "Working locally"}</span><h2>{state.screenContext.status === "capturing" ? "Looking at your screen…" : "Finding the clearest answer…"}</h2></div>
+            <div><span className="eyebrow">Working locally</span><h2>Finding the clearest answer…</h2></div>
             <div className="shimmer-lines"><i /><i /><i /></div>
           </div>
         ) : (
@@ -215,15 +143,11 @@ function ExpandedBody({
     );
   }
 
-  let latestAssistantMessageId: string | undefined;
-  for (const item of state.messages) {
-    if (item.role === "assistant") latestAssistantMessageId = item.id;
-  }
   return (
     <section className="expanded-content conversation-state" aria-label="Conversation with Clarity">
       <div className="conversation-heading"><div><span className="eyebrow">Conversation</span><h2>{state.conversationTitle || "Chat with Clarity"}</h2></div><button className="quiet-action" type="button" onClick={() => dispatch({ type: "CLEAR" })}><MessageSquarePlus size={13} /> New chat</button></div>
       <div className="chat-thread" role="log" aria-live="polite" aria-relevant="additions text">
-        {state.messages.map((message) => <ConversationTurn key={message.id} message={message} state={state} isLatestAssistant={message.id === latestAssistantMessageId} retry={() => dispatch({ type: "RETRY" })} />)}
+        {state.messages.map((message) => <ConversationTurn key={message.id} message={message} state={state} retry={() => dispatch({ type: "RETRY" })} />)}
         <div ref={conversationEnd} />
       </div>
       <div className="response-footer"><span><ShieldCheck size={13} /> Conversation stored on this Mac</span><span>{state.messages.length} {state.messages.length === 1 ? "message" : "messages"}</span></div>
@@ -270,8 +194,6 @@ function OverlayApp() {
   const expanded = Boolean(state && isExpanded(state.phase));
   const listening = Boolean(state?.startedAt);
   const duration = useMemo(() => elapsed(state?.startedAt ?? null, now), [state?.startedAt, now]);
-  const usesScreen = Boolean(state?.screenContext.enabled);
-  const capturingScreen = state?.screenContext.status === "capturing";
 
   async function dispatch(action: Record<string, unknown>) {
     setState(await window.clarityOverlay.dispatch(action));
@@ -362,16 +284,8 @@ function OverlayApp() {
             aria-label="Ask Clarity"
             value={draft}
             onChange={(event) => { setDraft(event.target.value); void window.clarityOverlay.dispatch({ type: "SET_PROMPT", prompt: event.target.value }); }}
-            placeholder={usesScreen ? (state.messages.length ? "Ask a follow-up about your screen…" : "Ask anything about your screen…") : state.messages.length ? "Ask a follow-up…" : listening ? "Ask about this conversation…" : "Ask anything…"}
+            placeholder={state.messages.length ? "Ask a follow-up…" : listening ? "Ask about this conversation…" : "Ask anything…"}
           />
-          <IconButton
-            label={capturingScreen ? "Capturing current display" : usesScreen ? "Uses screen" : "Does not use screen"}
-            active={usesScreen}
-            pressed={usesScreen}
-            onClick={() => dispatch({ type: "SET_SCREEN_CONTEXT_ENABLED", enabled: !usesScreen })}
-          >
-            {capturingScreen ? <LoaderCircle className="spin" size={15} /> : <ImageIcon size={15} />}
-          </IconButton>
           <button ref={modeButton} className={`mode-pill ${modePicker ? "is-active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={Boolean(modePicker)} aria-label={`Assistant mode: ${modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.label ?? "General"}`} onClick={() => void toggleModePicker()}><Grid2X2 size={12} /><span>{modeModel?.modes.find((mode) => mode.id === modeModel.activeModeId)?.shortLabel ?? "General"}</span><ChevronDown size={10} /></button>
           <IconButton label={listening ? "Stop listening" : "Start listening"} active={listening} onClick={() => dispatch({ type: listening ? "STOP_LISTENING" : "START_LISTENING" })}>
             {listening ? <Square size={13} fill="currentColor" /> : <Mic size={15} />}

@@ -64,7 +64,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Clarity uses the microphone only while you visibly start listening.",
-        "NSScreenCaptureUsageDescription": "Clarity uses Screen Recording permission for meeting system audio and for screen-context questions you explicitly enable. Screenshots are not saved by Clarity."
+        "NSScreenCaptureUsageDescription": "Clarity uses Screen Recording permission only for meeting system audio while listening is active."
       }
     },
     "extraResources": [

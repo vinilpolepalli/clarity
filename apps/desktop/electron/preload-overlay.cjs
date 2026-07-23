@@ -2,8 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const allowedActions = new Set([
   "SHOW", "HIDE", "TOGGLE_VISIBILITY", "SET_PROMPT", "SUBMIT", "EXPAND", "COLLAPSE",
-  "START_LISTENING", "STOP_LISTENING", "SHOW_HISTORY", "LOAD_CONVERSATION", "RETRY", "CLEAR",
-  "SET_SCREEN_CONTEXT_ENABLED"
+  "START_LISTENING", "STOP_LISTENING", "SHOW_HISTORY", "LOAD_CONVERSATION", "RETRY", "CLEAR"
 ]);
 
 const overlayBridge = {
@@ -19,10 +18,6 @@ const overlayBridge = {
   openModePicker: (layout) => ipcRenderer.invoke("overlay:open-mode-picker", layout),
   closeModePicker: () => ipcRenderer.invoke("overlay:close-mode-picker"),
   openSettings: (tab) => ipcRenderer.invoke("overlay:open-settings", tab),
-  openModelSettings: () => ipcRenderer.invoke("overlay:open-model-settings"),
-  getScreenPreview: (attachmentId) => ipcRenderer.invoke("overlay:get-screen-preview", attachmentId),
-  openScreenPermissionSettings: () => ipcRenderer.invoke("overlay:open-screen-permission-settings"),
-  recheckScreenPermission: () => ipcRenderer.invoke("overlay:recheck-screen-permission"),
   onState: (listener) => {
     const handler = (_event, state) => listener(state);
     ipcRenderer.on("overlay:state", handler);

@@ -43,10 +43,8 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   outputLanguage: "English",
   microphoneId: "default",
   captureSystemAudio: true,
-  screenContextEnabled: false,
   provider: "demo",
   model: "clarity-demo",
-  imageInputOverrides: {},
   customModels: { nvidia: [], openai: [], anthropic: [] },
   mode: "general",
   selectedSettingsTab: "general",
@@ -86,7 +84,7 @@ export const DEMO_HISTORY = Object.freeze([
   }
 ]);
 
-export function createInitialOverlayState(visible = true, screenContextEnabled = false) {
+export function createInitialOverlayState(visible = true) {
   return {
     version: 2,
     phase: visible ? "compact-idle" : "hidden",
@@ -102,16 +100,6 @@ export function createInitialOverlayState(visible = true, screenContextEnabled =
     activeAssistantMessageId: null,
     lastPrompt: "",
     startedAt: null,
-    screenContext: {
-      enabled: Boolean(screenContextEnabled),
-      status: "idle",
-      capability: "unknown",
-      attachmentId: null,
-      capturedAt: null,
-      displayId: null,
-      errorCode: null,
-      error: null
-    }
   };
 }
 
@@ -138,15 +126,14 @@ export function mergePreferences(value) {
   const candidate = value && typeof value === "object" ? value : {};
   const keybindings = candidate.keybindings && typeof candidate.keybindings === "object" ? candidate.keybindings : {};
   const integrations = candidate.integrations && typeof candidate.integrations === "object" ? candidate.integrations : {};
-  const imageInputOverrides = candidate.imageInputOverrides && typeof candidate.imageInputOverrides === "object" ? candidate.imageInputOverrides : {};
   const customModels = candidate.customModels && typeof candidate.customModels === "object" ? candidate.customModels : {};
+  const { screenContextEnabled: _legacyScreenContextEnabled, imageInputOverrides: _legacyImageInputOverrides, ...knownPreferences } = candidate;
   const merged = {
     ...DEFAULT_PREFERENCES,
-    ...candidate,
+    ...knownPreferences,
     version: 1,
     keybindings: { ...DEFAULT_PREFERENCES.keybindings, ...keybindings },
     integrations: { ...DEFAULT_PREFERENCES.integrations, ...integrations },
-    imageInputOverrides: { ...imageInputOverrides },
     customModels: Object.fromEntries(Object.keys(DEFAULT_PREFERENCES.customModels).map((provider) => {
       const values = Array.isArray(customModels[provider]) ? customModels[provider] : [];
       const normalized = [...new Set(values.map((value) => String(value).trim()).filter(Boolean))]
@@ -172,61 +159,6 @@ export function reduceOverlay(state, event) {
       return state.phase === "hidden" ? reduceOverlay(state, { type: "SHOW" }) : reduceOverlay(state, { type: "HIDE" });
     case "SET_PROMPT":
       return { ...state, prompt: String(event.prompt ?? "").slice(0, 8_000) };
-    case "SET_SCREEN_CONTEXT_ENABLED":
-      {
-      const keepActiveAttachment = state.screenContext.status === "attached" && state.screenContext.attachmentId;
-      return {
-        ...state,
-        screenContext: {
-          ...state.screenContext,
-          enabled: Boolean(event.enabled),
-          status: keepActiveAttachment ? "attached" : "idle",
-          attachmentId: keepActiveAttachment ? state.screenContext.attachmentId : null,
-          capturedAt: keepActiveAttachment ? state.screenContext.capturedAt : null,
-          displayId: keepActiveAttachment ? state.screenContext.displayId : null,
-          errorCode: null,
-          error: null
-        }
-      };
-      }
-    case "SET_SCREEN_CAPABILITY":
-      return { ...state, screenContext: { ...state.screenContext, capability: event.capability ?? "unknown" } };
-    case "SCREEN_CAPTURE_STARTED":
-      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
-      return { ...state, screenContext: { ...state.screenContext, status: "capturing", attachmentId: null, capturedAt: null, displayId: null, errorCode: null, error: null } };
-    case "SCREEN_CAPTURE_ATTACHED":
-      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
-      return {
-        ...state,
-        screenContext: {
-          ...state.screenContext,
-          status: "attached",
-          attachmentId: String(event.attachmentId ?? ""),
-          capturedAt: Number(event.capturedAt ?? Date.now()),
-          displayId: String(event.displayId ?? ""),
-          errorCode: null,
-          error: null
-        }
-      };
-    case "SCREEN_CAPTURE_FAILED":
-      if (event.requestId && state.requestId && event.requestId !== state.requestId) return state;
-      return {
-        ...state,
-        screenContext: {
-          ...state.screenContext,
-          status: event.status === "permission-blocked" || event.status === "unsupported" ? event.status : "error",
-          attachmentId: null,
-          capturedAt: null,
-          displayId: null,
-          errorCode: String(event.errorCode ?? "capture-failed"),
-          error: String(event.error ?? "Screen context could not be captured.")
-        }
-      };
-    case "SCREEN_CAPTURE_CLEARED":
-      return {
-        ...state,
-        screenContext: { ...state.screenContext, status: "idle", attachmentId: null, capturedAt: null, displayId: null, errorCode: null, error: null }
-      };
     case "SUBMIT": {
       if (state.requestId) return state;
       const prompt = String(event.prompt ?? state.prompt).trim().slice(0, 8_000);
@@ -333,14 +265,13 @@ export function reduceOverlay(state, event) {
       };
     }
     case "CLEAR": {
-      const cleared = createInitialOverlayState(true, state.screenContext.enabled);
+      const cleared = createInitialOverlayState(true);
       const phase = isExpandedPhase(state.phase) ? "expanded-empty" : state.startedAt ? "compact-listening" : "compact-idle";
       return {
         ...cleared,
         phase,
         previousVisiblePhase: phase,
-        startedAt: state.startedAt,
-        screenContext: { ...cleared.screenContext, capability: state.screenContext.capability }
+        startedAt: state.startedAt
       };
     }
     default:

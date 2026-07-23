@@ -22,16 +22,6 @@ export interface OverlayState {
   activeAssistantMessageId: string | null;
   lastPrompt: string;
   startedAt: number | null;
-  screenContext: {
-    enabled: boolean;
-    status: "idle" | "capturing" | "attached" | "permission-blocked" | "unsupported" | "error";
-    capability: "supported" | "unsupported" | "unknown";
-    attachmentId: string | null;
-    capturedAt: number | null;
-    displayId: string | null;
-    errorCode: string | null;
-    error: string | null;
-  };
 }
 
 export interface ConversationMessage {
@@ -90,10 +80,8 @@ export interface Preferences {
   outputLanguage: string;
   microphoneId: string;
   captureSystemAudio: boolean;
-  screenContextEnabled: boolean;
   provider: string;
   model: string;
-  imageInputOverrides: Record<string, boolean>;
   customModels: Record<"nvidia" | "openai" | "anthropic", string[]>;
   mode: string;
   selectedSettingsTab: string;
@@ -134,12 +122,6 @@ export interface SettingsModel {
   onboarding: boolean;
   keyConfigured: Record<string, boolean>;
   defaultProviderModels: Record<string, string>;
-  imageInput: {
-    capability: "supported" | "unsupported" | "unknown";
-    endpointIdentity: string;
-    overrideKey: string;
-    explicitOverride: boolean | null;
-  };
   providerCatalog: { curated: ProviderModel[]; discoverySupported: boolean };
   providerConnection: ProviderConnection;
 }
@@ -156,10 +138,6 @@ declare global {
       openModePicker(layout: { desiredHeight: number; anchorRect: { x: number; y: number; width: number; height: number } }): Promise<{ placement: "above" | "below"; viewportHeight: number; surfaceOffsetY: number }>;
       closeModePicker(): Promise<boolean>;
       openSettings(tab?: string): Promise<boolean>;
-      openModelSettings(): Promise<boolean>;
-      getScreenPreview(attachmentId: string): Promise<{ mediaType: "image/png" | "image/jpeg"; bytes: Uint8Array } | null>;
-      openScreenPermissionSettings(): Promise<boolean>;
-      recheckScreenPermission(): Promise<string>;
       onState(listener: (state: OverlayState) => void): () => void;
       onModeModel(listener: (model: ModeModel) => void): () => void;
       onPickerClosed(listener: () => void): () => void;
