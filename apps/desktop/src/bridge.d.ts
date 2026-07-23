@@ -34,6 +34,10 @@ export interface OverlayState {
   };
 }
 
+export interface OverlayAppearance {
+  reduceTransparency: boolean;
+}
+
 export interface ConversationMessage {
   id: string;
   role: "user" | "assistant";
@@ -148,6 +152,7 @@ declare global {
   interface Window {
     clarityOverlay: {
       getState(): Promise<OverlayState>;
+      getAppearance(): Promise<OverlayAppearance>;
       dispatch(action: Record<string, unknown>): Promise<OverlayState>;
       getHistory(): Promise<HistoryItem[]>;
       getConversation(id: string): Promise<Conversation | null>;
@@ -161,9 +166,10 @@ declare global {
       openScreenPermissionSettings(): Promise<boolean>;
       recheckScreenPermission(): Promise<string>;
       onState(listener: (state: OverlayState) => void): () => void;
+      onAppearance(listener: (appearance: OverlayAppearance) => void): () => void;
       onModeModel(listener: (model: ModeModel) => void): () => void;
       onPickerClosed(listener: () => void): () => void;
-      testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; settings: SettingsModel; contentProtected: boolean; resizable: boolean; windowId: number | null; pickerOpen: boolean; activeRequest: { requestId: string; modeId: string; promptVersion: number } | null; failedRequest: { modeId: string; promptVersion: number } | null }>;
+      testSnapshot?(): Promise<{ overlay: OverlayState; bounds: { x: number; y: number; width: number; height: number }; overlayBackgroundColor: string | null; settings: SettingsModel; contentProtected: boolean; resizable: boolean; windowId: number | null; pickerOpen: boolean; activeRequest: { requestId: string; modeId: string; promptVersion: number } | null; failedRequest: { modeId: string; promptVersion: number } | null }>;
       testSetBounds?(bounds: Partial<{ x: number; y: number; width: number; height: number }>): Promise<{ x: number; y: number; width: number; height: number }>;
     };
     claritySettings: {

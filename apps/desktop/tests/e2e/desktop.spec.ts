@@ -27,6 +27,27 @@ async function pageByTitle(application: Awaited<ReturnType<typeof electron.launc
   throw new Error(`No open Electron page has the title ${title}`);
 }
 
+test("reduce transparency keeps the native overlay transparent", async () => {
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    expect((await overlay.evaluate(() => window.clarityOverlay.testSnapshot!())).overlayBackgroundColor).toBe("#000000");
+
+    await overlay.getByRole("button", { name: "Settings" }).click();
+    const settings = await pageByTitle(application, "Clarity");
+    await settings.getByRole("switch", { name: "Reduce transparency" }).click();
+
+    await expect.poll(() => overlay.evaluate(() => document.body.dataset.reduceTransparency)).toBe("true");
+    const after = await overlay.evaluate(() => window.clarityOverlay.testSnapshot!());
+    expect(after.settings.preferences.reduceTransparency).toBe(true);
+    expect(after.overlayBackgroundColor).toBe("#000000");
+    await expect(overlay).toHaveScreenshot("overlay-reduced-transparency.png");
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
 test("overlay preserves its anchor, reflows, and keeps settings separate", async () => {
   test.setTimeout(60_000);
   const { application, userData } = await launch({ CLARITY_TEST_INFERENCE_DELAY: "1500" });
@@ -146,6 +167,28 @@ test("demo history materializes into a conversation that accepts follow-ups", as
     await expect(overlay.locator(".message-count")).toHaveText("4 messages");
     await overlay.locator(".history-row").click();
     await expect(overlay.locator(".user-bubble")).toHaveCount(2);
+  } finally {
+    await application.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
+
+test("assistant responses render Markdown and lead code answers with a formatted code block", async () => {
+  test.setTimeout(60_000);
+  const { application, userData } = await launch();
+  try {
+    const overlay = await pageByTitle(application, "Clarity Overlay");
+    await overlay.getByRole("button", { name: "Expand" }).click();
+    await overlay.getByRole("textbox", { name: "Ask Clarity" }).fill("Show a code example in Markdown");
+    await overlay.getByRole("button", { name: "Send" }).click();
+
+    const response = overlay.locator(".assistant-turn").last().locator(".markdown-response");
+    await expect(response.locator(".markdown-code-block")).toBeVisible();
+    await expect(response.locator(".markdown-code-block")).toHaveAttribute("data-language", "ts");
+    await expect(response.locator(".markdown-code-block code")).toContainText('status: "ready to verify"');
+    await expect(response.locator(".markdown-heading")).toHaveText("Verify the handoff");
+    await expect(response.getByRole("link", { name: "Read the local-first guide" })).toHaveAttribute("href", "https://example.com/local-first");
+    await expect(response.locator(":scope > :first-child")).toHaveClass(/markdown-code-block/);
   } finally {
     await application.close();
     await rm(userData, { recursive: true, force: true });
