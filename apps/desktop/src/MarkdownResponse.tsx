@@ -17,7 +17,7 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
 
   for (let index = 0; index < lines.length;) {
-    const line = lines[index]!;
+    const line = lines[index] ?? "";
     if (!line.trim()) { index += 1; continue; }
 
     const fence = line.match(/^```\s*([^\s`]*)?\s*$/);
@@ -25,7 +25,7 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
       const language = fence[1] || "text";
       const code: string[] = [];
       index += 1;
-      while (index < lines.length && !/^```\s*$/.test(lines[index]!)) code.push(lines[index++]!);
+      while (index < lines.length && !/^```\s*$/.test(lines[index] ?? "")) code.push(lines[index++] ?? "");
       if (index < lines.length) index += 1;
       blocks.push({ type: "code", language, content: code.join("\n") });
       continue;
@@ -33,7 +33,7 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
 
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
-      blocks.push({ type: "heading", level: heading[1]!.length as 1 | 2 | 3, content: heading[2]! });
+      blocks.push({ type: "heading", level: (heading[1] ?? "").length as 1 | 2 | 3, content: heading[2] ?? "" });
       index += 1;
       continue;
     }
@@ -42,9 +42,9 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
     if (unordered) {
       const items: string[] = [];
       while (index < lines.length) {
-        const item = lines[index]!.match(/^[-*+]\s+(.+)$/);
+        const item = lines[index]?.match(/^[-*+]\s+(.+)$/);
         if (!item) break;
-        items.push(item[1]!);
+        items.push(item[1] ?? "");
         index += 1;
       }
       blocks.push({ type: "unordered-list", items });
@@ -55,9 +55,9 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
     if (ordered) {
       const items: string[] = [];
       while (index < lines.length) {
-        const item = lines[index]!.match(/^\d+[.)]\s+(.+)$/);
+        const item = lines[index]?.match(/^\d+[.)]\s+(.+)$/);
         if (!item) break;
-        items.push(item[1]!);
+        items.push(item[1] ?? "");
         index += 1;
       }
       blocks.push({ type: "ordered-list", items });
@@ -68,9 +68,9 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
     if (quote) {
       const quoteLines: string[] = [];
       while (index < lines.length) {
-        const item = lines[index]!.match(/^>\s?(.*)$/);
+        const item = lines[index]?.match(/^>\s?(.*)$/);
         if (!item) break;
-        quoteLines.push(item[1]!);
+        quoteLines.push(item[1] ?? "");
         index += 1;
       }
       blocks.push({ type: "quote", content: quoteLines.join("\n") });
@@ -78,7 +78,7 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
     }
 
     const paragraph: string[] = [];
-    while (index < lines.length && lines[index]!.trim() && !isBlockStart(lines[index]!)) paragraph.push(lines[index++]!);
+    while (index < lines.length && lines[index]?.trim() && !isBlockStart(lines[index] ?? "")) paragraph.push(lines[index++] ?? "");
     blocks.push({ type: "paragraph", content: paragraph.join("\n") });
   }
 
