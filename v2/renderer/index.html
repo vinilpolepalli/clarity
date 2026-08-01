@@ -21,6 +21,7 @@
         <button class="tab" data-tab="models" title="Model dashboard">Models</button>
       </nav>
       <div class="bar-right">
+        <button class="icon-btn on" id="stealthBtn" title="Undetectable: hidden from screen shares & recordings">🛡</button>
         <button class="icon-btn" id="clickThroughBtn" title="Toggle click-through">👻</button>
         <button class="icon-btn" id="hideBtn" title="Hide panel">▾</button>
         <button class="icon-btn danger" id="quitBtn" title="Quit">✕</button>
@@ -40,8 +41,13 @@
 
       <!-- LISTEN / MEETING -->
       <section class="panel" data-panel="listen">
+        <div class="listen-controls">
+          <button id="listenBtn" class="send listen-btn">● Start Listening</button>
+          <span id="listenState" class="listen-state">Idle — click to capture mic &amp; meeting audio</span>
+          <label class="auto-toggle"><input type="checkbox" id="autoGuide" checked /> Auto-guide</label>
+        </div>
         <div class="prompt-row">
-          <input id="meetInput" class="prompt" type="text" placeholder="Paste / type what was just said…" />
+          <input id="meetInput" class="prompt" type="text" placeholder="…or type what was just said" />
           <button id="meetAdd" class="send">Add + Guide</button>
         </div>
         <div class="split">
@@ -94,6 +100,7 @@
       <span class="kbd">⌘⇧S Screen</span>
     </footer>
   </div>
+  <script src="audio.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

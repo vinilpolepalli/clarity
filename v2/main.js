@@ -7,7 +7,10 @@ let win = null;
 const state = {
   model: nim.DEFAULT_MODEL,
   transcript: [],
-  clickThrough: false
+  clickThrough: false,
+  // Undetectable by default: the window is excluded from screen capture,
+  // screen sharing and recording (Cluely's defining property).
+  contentProtection: true
 };
 
 function createWindow() {
@@ -31,12 +34,33 @@ function createWindow() {
     }
   });
   win.setAlwaysOnTop(true, 'screen-saver');
+  // Hide from screen shares / recordings, and keep it hidden as the window is
+  // shown on other desktops.
+  win.setContentProtection(state.contentProtection);
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (process.platform === 'darwin' && app.dock) app.dock.hide();
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
 // ---- IPC ----
-ipcMain.handle('clarity:getState', () => ({ model: state.model, models: nim.MODELS, clickThrough: state.clickThrough }));
+ipcMain.handle('clarity:getState', () => ({
+  model: state.model,
+  models: nim.MODELS,
+  clickThrough: state.clickThrough,
+  contentProtection: state.contentProtection
+}));
+
+ipcMain.handle('clarity:contentProtection', (_e, v) => {
+  state.contentProtection = !!v;
+  if (win) win.setContentProtection(state.contentProtection);
+  return { contentProtection: state.contentProtection };
+});
+
+// Transcript lines produced by live speech recognition in the renderer.
+ipcMain.handle('clarity:addTranscript', (_e, line) => {
+  if (line && line.trim()) state.transcript.push(line.trim());
+  return { transcriptLen: state.transcript.length };
+});
 
 ipcMain.handle('clarity:setModel', (_e, id) => {
   state.model = id;
@@ -88,18 +112,24 @@ ipcMain.handle('clarity:capture', async () => {
   });
   const src = sources[0];
   if (!src) throw new Error('No screen source');
-  return src.thumbnail.toDataURL();
+  // NIM rejects inline images much over ~180 KB, so downscale and use JPEG.
+  const shot = src.thumbnail.resize({ width: 1024, quality: 'good' });
+  return `data:image/jpeg;base64,${shot.toJPEG(70).toString('base64')}`;
 });
 
 ipcMain.handle('clarity:screen', async (_e, { dataUrl, text }) => {
-  const image = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+  // NIM vision models take the OpenAI-style content array; passing the image as
+  // an inline <img> tag makes the model describe the data URI instead (or 500).
   const r = await nim.chat({
     model: nim.VISION_MODEL,
     messages: [
       { role: 'system', content: prompts.SCREEN },
       {
         role: 'user',
-        content: `${text || 'What should I do on this screen?'} <img src="data:image/png;base64,${image}" />`
+        content: [
+          { type: 'text', text: text || 'What should I do on this screen?' },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]
       }
     ],
     maxTokens: 700

@@ -126,6 +126,19 @@ html, body { height: 100%; background: transparent; color: var(--text); overflow
 .out code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 .hint { color: var(--muted); font-style: italic; }
 
+/* ---- Live listening controls ---- */
+.listen-controls { display: flex; align-items: center; gap: 12px; }
+.listen-btn { padding: 9px 16px; }
+.listen-btn.recording {
+  background: linear-gradient(135deg, #f87171, #fb923c);
+  animation: rec 1.4s infinite;
+}
+@keyframes rec { 0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,.5); } 50% { box-shadow: 0 0 0 8px rgba(248,113,113,0); } }
+.listen-state { font-size: 12px; color: var(--muted); flex: 1; }
+.listen-state.live { color: var(--ok); }
+.auto-toggle { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.transcript .line.pending { color: var(--muted); font-style: italic; }
+
 .split { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; overflow: hidden; }
 .col { display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
 .col-title { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); }

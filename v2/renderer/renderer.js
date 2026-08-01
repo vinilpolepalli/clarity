@@ -133,6 +133,53 @@ async function doMeeting() {
 $('#meetAdd').addEventListener('click', doMeeting);
 $('#meetInput').addEventListener('keydown', (e) => e.key === 'Enter' && doMeeting());
 
+// ---- Live listening (mic + system audio -> Whisper -> transcript -> guidance) ----
+const engine = new window.AudioEngine();
+window.__clarityEngine = engine; // test seam: lets tests feed known PCM through the real pipeline
+
+engine.onStatus = (msg) => setStatus(msg);
+engine.onLoadProgress = (pct, file) => setStatus(`Loading speech model ${pct}% (${file})`, 'busy');
+engine.onTranscript = async (text, ms) => {
+  localTranscript.push(text);
+  renderTranscript(localTranscript);
+  await window.clarity.addTranscript(text);
+  setStatus(`Heard: "${text.slice(0, 48)}" (${ms}ms)`);
+  if ($('#autoGuide').checked) doMeeting();
+};
+
+let listening = false;
+async function toggleListening() {
+  const btn = $('#listenBtn');
+  if (!listening) {
+    btn.disabled = true;
+    setStatus('Starting capture…', 'busy');
+    try {
+      const got = await engine.start();
+      listening = true;
+      btn.textContent = '■ Stop Listening';
+      btn.classList.add('recording');
+      const srcs = [got.mic && 'mic', got.system && 'system audio'].filter(Boolean).join(' + ');
+      $('#listenState').textContent = `Live — capturing ${srcs}`;
+      $('#listenState').classList.add('live');
+      setStatus(`Listening (${srcs})`);
+    } catch (e) {
+      setStatus(`Cannot listen: ${e.message}`, 'err');
+      $('#listenState').textContent = `Unavailable: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  } else {
+    await engine.stop();
+    listening = false;
+    btn.textContent = '● Start Listening';
+    btn.classList.remove('recording');
+    $('#listenState').textContent = 'Idle — click to capture mic & meeting audio';
+    $('#listenState').classList.remove('live');
+    setStatus('Stopped listening');
+  }
+}
+$('#listenBtn').addEventListener('click', toggleListening);
+
 // ---- Screen ----
 async function doScreen() {
   $('#screenGo').disabled = true;
@@ -202,6 +249,14 @@ $('#hideBtn').addEventListener('click', () => {
   s.style.display = hidden ? '' : 'none';
   $('#hideBtn').textContent = hidden ? '▾' : '▸';
 });
+let stealth = true;
+$('#stealthBtn').addEventListener('click', async () => {
+  stealth = !stealth;
+  await window.clarity.toggleContentProtection(stealth);
+  $('#stealthBtn').classList.toggle('on', stealth);
+  setStatus(stealth ? 'Undetectable ON — hidden from screen shares' : 'Undetectable OFF — visible in screen shares');
+});
+
 let clickThrough = false;
 $('#clickThroughBtn').addEventListener('click', async () => {
   clickThrough = !clickThrough;
@@ -224,6 +279,8 @@ window.clarity.onHotkey((name) => {
   try {
     const st = await window.clarity.getState();
     currentModel = st.model;
+    stealth = st.contentProtection;
+    $('#stealthBtn').classList.toggle('on', stealth);
     setStatus(`Ready · ${st.model}`);
   } catch (e) {
     setStatus('Ready (no backend state)');

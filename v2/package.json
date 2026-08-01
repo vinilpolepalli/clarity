@@ -5,12 +5,20 @@
   "main": "main.js",
   "private": true,
   "scripts": {
+    "build:asr": "esbuild renderer/asr-worker.src.js --bundle --format=esm --platform=browser --outfile=renderer/asr-worker.js",
+    "fetch:model": "node scripts/fetch-model.js",
+    "setup": "npm run fetch:model && npm run build:asr",
+    "postinstall": "npm run setup",
     "start": "electron .",
     "test": "playwright test --reporter=list"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
     "electron": "^33.2.0",
+    "esbuild": "^0.28.1",
     "playwright": "^1.49.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1"
   }
 }
