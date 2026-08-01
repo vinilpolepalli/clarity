@@ -305,6 +305,12 @@ window.clarity.onHotkey((name) => {
   else if (name === 'hide') { $('#hideBtn').click(); }
 });
 
+// ---- Demo backdrop (screenshot harness) ----
+if (new URLSearchParams(location.search).get('demo')) {
+  document.body.classList.add('demo');
+  $('#demoBackdrop').hidden = false;
+}
+
 // ---- Init ----
 (async function init() {
   try {

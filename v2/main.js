@@ -16,17 +16,28 @@ const state = {
 function createWindow() {
   const primary = screen.getPrimaryDisplay();
   const width = Math.min(920, primary.workAreaSize.width);
+  // Screenshot harness: fill the display so the mock meeting can be rendered
+  // inside the page, behind the overlay. backdrop-filter only samples the same
+  // document, so a separate window behind us would not be refracted at all.
+  const demo = !!process.env.CLARITY_DEMO_BACKDROP;
+  const geom = demo
+    ? { ...primary.workArea }
+    : { width, height: 620, x: Math.round((primary.workAreaSize.width - width) / 2), y: 24 };
+
   win = new BrowserWindow({
-    width,
-    height: 620,
-    x: Math.round((primary.workAreaSize.width - width) / 2),
-    y: 24,
+    ...geom,
     frame: false,
     transparent: true,
     resizable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: false,
+    // Real OS-level glass: the compositor blurs whatever is actually behind the
+    // window, which CSS cannot reach. This is what makes the material live.
+    ...(process.platform === 'darwin'
+      ? { vibrancy: 'under-window', visualEffectState: 'active' }
+      : {}),
+    ...(process.platform === 'win32' ? { backgroundMaterial: 'acrylic' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -39,7 +50,7 @@ function createWindow() {
   win.setContentProtection(state.contentProtection);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (process.platform === 'darwin' && app.dock) app.dock.hide();
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), demo ? { search: 'demo=1' } : {});
 }
 
 // ---- IPC ----

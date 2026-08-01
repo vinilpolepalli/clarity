@@ -7,6 +7,9 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Screenshot harness only (?demo=1): an in-page mock meeting so the glass
+       has real content to refract. backdrop-filter cannot sample other windows. -->
+  <iframe id="demoBackdrop" src="../demo/backdrop.html" hidden></iframe>
   <div id="app">
     <!-- Top pill toolbar (Cluely-style) -->
     <header id="bar" class="bar">
