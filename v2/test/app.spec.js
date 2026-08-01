@@ -109,6 +109,49 @@ test('live speech is transcribed by Whisper and appended to the transcript', asy
   await shot('08-live-transcription.png');
 });
 
+test('mic and system audio are tracked as separate speakers', async () => {
+  test.setTimeout(300000);
+  await win.locator('.tab[data-tab="listen"]').click();
+  const before = await win.locator('#transcript .line').count();
+  // This test is about speaker labelling, not guidance. Leaving auto-guide on
+  // would fire a slow NIM call that resolves after the test ends and overwrites
+  // the shared status bar mid-way through the next one.
+  await win.locator('#autoGuide').uncheck();
+
+  // Same speech pushed down the "Them" (system/loopback) track must come back
+  // labelled as the other party, not as the user. This is the thing plain
+  // dictation cannot do: it only ever hears one microphone.
+  await win.evaluate(async () => {
+    const res = await fetch('../test/fixtures/speech.wav');
+    const octx = new OfflineAudioContext(1, 1, 44100);
+    const decoded = await octx.decodeAudioData(await res.arrayBuffer());
+    const pcm = window.AudioEngine.resample(decoded.getChannelData(0), decoded.sampleRate);
+    const e = window.__clarityEngine;
+    for (let i = 0; i < pcm.length; i += 4096) e.pushSamples(pcm.slice(i, i + 4096), window.SPEAKER_THEM);
+    e.flush(window.SPEAKER_THEM);
+  });
+
+  await expect(win.locator('#transcript .line')).toHaveCount(before + 1, { timeout: 240000 });
+  const last = win.locator('#transcript .line').last();
+  await expect(last.locator('.who')).toHaveText('Them');
+  await expect(last).toContainText(/country/i);
+
+  // and the two tracks keep independent VAD state
+  const independent = await win.evaluate(() => {
+    const e = window.__clarityEngine;
+    const loud = new Float32Array(4096).fill(0.2);
+    e.pushSamples(loud, window.SPEAKER_YOU);
+    return {
+      you: e.tracks[window.SPEAKER_YOU].speaking,
+      them: e.tracks[window.SPEAKER_THEM].speaking
+    };
+  });
+  expect(independent).toEqual({ you: true, them: false });
+  await win.evaluate(() => window.__clarityEngine.tracks[window.SPEAKER_YOU].reset());
+  await shot('09-speakers.png');
+  await win.locator('#autoGuide').check();
+});
+
 test('mic capture starts and stops through the real getUserMedia path', async () => {
   await win.locator('.tab[data-tab="listen"]').click();
   await win.locator('#listenBtn').click();
@@ -155,6 +198,25 @@ test('undetectable (content protection) is on by default and toggles', async () 
   await win.locator('#stealthBtn').click();
   await expect(win.locator('#status')).toContainText('Undetectable ON');
   expect((await win.evaluate(() => window.clarity.getState())).contentProtection).toBe(true);
+});
+
+test('a truncated reasoning reply is never shown as the answer', async () => {
+  // Regression guard: the renderer used to fall back to `reasoning` when
+  // `content` was empty, so a reasoning model that ran out of budget mid-thought
+  // had its raw scratchpad rendered as if it were real guidance.
+  const html = await win.evaluate(() =>
+    window.__answerHtml({ content: '', reasoning: 'Hmm, the user wants... let me think', truncated: true })
+  );
+  expect(html).toContain('ran out of room while reasoning');
+  expect(html).toContain('<details');
+  // the scratchpad is only reachable behind the disclosure, never as the answer
+  expect(html.indexOf('ran out of room')).toBeLessThan(html.indexOf('let me think'));
+
+  const normal = await win.evaluate(() =>
+    window.__answerHtml({ content: '### Summary\nAll good', reasoning: 'scratch', truncated: false })
+  );
+  expect(normal).toContain('All good');
+  expect(normal).not.toContain('scratch');
 });
 
 test('Models dashboard pings NIM models', async () => {

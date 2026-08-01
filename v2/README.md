@@ -14,15 +14,38 @@ A from-scratch rebuild of Clarity as a **Cluely-style undetectable AI meeting co
 
 ### Undetectable
 
-The window is created with `setContentProtection(true)`, so it is **excluded from screen shares, screen recordings and screenshots** — you see it, Zoom/Meet/Teams and QuickTime do not. It is also frameless, hidden from the taskbar/dock, and visible across all workspaces including full-screen apps. The 🛡 button toggles it.
+This is an **OS-level window flag**, not a drawing trick. `setContentProtection(true)` maps to:
+
+| Platform | Underlying call |
+|----------|-----------------|
+| macOS | `NSWindow.sharingType = NSWindowSharingNone` |
+| Windows | `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` |
+| Linux/X11 | no-op — X11 has no equivalent guarantee |
+
+The compositor itself omits the window from any capture, so it is **excluded from screen shares, screen recordings and screenshots** — you see it, Zoom/Meet/Teams and QuickTime do not. It is on by default and the 🛡 button toggles it. The window is also frameless, hidden from the taskbar/dock, and visible across all workspaces including full-screen apps.
 
 Plus the rest of the overlay chrome: draggable glass pill bar, **click-through** ghost mode (overlay ignores the mouse so you can work behind it), **hide/show**, quit, and global hotkeys (`⌘⏎` Ask, `⌘⇧M` Listen, `⌘⇧C` Code, `⌘⇧S` Screen, `⌘⇧H` hide).
 
-### How live transcription works
+### Listen is not dictation
 
-NVIDIA NIM has no speech-to-text model in its catalog (checked all 102 — only `riva-translate`, which is text translation), so speech recognition runs **on-device**: OpenAI Whisper (`whisper-tiny.en`, INT8 ONNX) executing in a Web Worker via Transformers.js/WASM. Audio flows mic + system loopback → mixed → resampled to 16 kHz → energy-based VAD splits it into utterances → Whisper → transcript line → NIM guidance. Keeping ASR local also means meeting audio never leaves the machine.
+Dictation transcribes **one microphone**, on purpose, for the person holding it. A meeting copilot has the opposite problem: the words you need help answering are the *other* person's, and they never touch your mic — they arrive over system/loopback audio. So Clarity captures two streams and segments them **independently**:
+
+| Stream | Speaker | Why it matters |
+|--------|---------|----------------|
+| Microphone | `You` | what you already said — never something to suggest you repeat |
+| System / loopback | `Them` | the question you actually need a reply to |
+
+Each stream gets its own VAD state, so you and the other party can talk over each other without merging into one garbled utterance. Every transcript line is labelled, the guidance model is told to anchor on the newest `Them:` line, and auto-guidance only re-fires when *they* speak — otherwise the overlay just talks back at you.
+
+### How transcription works
+
+NVIDIA NIM has no speech-to-text model in its catalog (checked all 102 — only `riva-translate`, which is text translation), so speech recognition runs **on-device**: OpenAI Whisper (`whisper-tiny.en`, INT8 ONNX) in a Web Worker via Transformers.js/WASM. Audio flows capture → 16 kHz resample → per-speaker VAD → Whisper → labelled transcript line → NIM guidance. Keeping ASR local also means meeting audio never leaves the machine.
 
 Weights are fetched once by `npm run setup` into `models/` (~42 MB) so the app transcribes offline and never stalls mid-meeting on a download.
+
+### Reasoning models
+
+`inkling` is a reasoning model: it emits a scratchpad in `reasoning_content` and the real answer in `content`. If it exhausts its token budget while still thinking, `content` comes back empty. Clarity retries once with a larger budget, and **never renders the scratchpad as the answer** — partial notes are only reachable behind an explicit "Model's reasoning" disclosure.
 
 ## Run
 

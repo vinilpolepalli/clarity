@@ -56,6 +56,27 @@ function fmt(s) {
     .replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
+/**
+ * Render a NIM reply. A reasoning model's scratchpad is never the answer, so
+ * it is only ever shown behind an explicit "thinking" disclosure — displaying
+ * it inline would pass half-finished notes off as guidance.
+ */
+function answerHtml(r) {
+  if (r.content) return renderMarkdown(r.content);
+  if (r.truncated) {
+    return `<div class="hint">The model ran out of room while reasoning and never reached an answer. Try a shorter question or a non-reasoning model.</div>${thinkingHtml(r.reasoning)}`;
+  }
+  if (r.reasoning) {
+    return `<div class="hint">No answer returned.</div>${thinkingHtml(r.reasoning)}`;
+  }
+  return '<div class="hint">(no content)</div>';
+}
+function thinkingHtml(reasoning) {
+  if (!reasoning) return '';
+  return `<details class="thinking"><summary>Model's reasoning</summary><div>${renderMarkdown(reasoning)}</div></details>`;
+}
+window.__answerHtml = answerHtml; // test seam
+
 // ---- Tabs ----
 function activateTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
@@ -73,7 +94,7 @@ async function doAsk() {
   $('#askOut').innerHTML = '<div class="hint">Thinking…</div>';
   try {
     const r = await window.clarity.ask({ text });
-    $('#askOut').innerHTML = renderMarkdown(r.content || r.reasoning || '(no content)');
+    $('#askOut').innerHTML = answerHtml(r);
     setStatus(`Answered · ${r.model} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#askOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;
@@ -94,7 +115,7 @@ async function doCode() {
   $('#codeOut').innerHTML = '<div class="hint">Generating…</div>';
   try {
     const r = await window.clarity.code({ text });
-    $('#codeOut').innerHTML = renderMarkdown(r.content || r.reasoning || '(no content)');
+    $('#codeOut').innerHTML = answerHtml(r);
     setStatus(`Code ready · ${r.model} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#codeOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;
@@ -109,7 +130,14 @@ $('#codeSend').addEventListener('click', doCode);
 function renderTranscript(lines) {
   const el = $('#transcript');
   if (!lines.length) { el.innerHTML = '<div class="hint">Lines you add appear here.</div>'; return; }
-  el.innerHTML = lines.map((l) => `<div class="line">${escapeHtml(l)}</div>`).join('');
+  el.innerHTML = lines
+    .map((l) => {
+      const m = l.match(/^(You|Them):\s*([\s\S]*)$/);
+      if (!m) return `<div class="line">${escapeHtml(l)}</div>`;
+      const who = m[1].toLowerCase();
+      return `<div class="line"><span class="who ${who}">${m[1]}</span>${escapeHtml(m[2])}</div>`;
+    })
+    .join('');
   el.scrollTop = el.scrollHeight;
 }
 const localTranscript = [];
@@ -121,7 +149,7 @@ async function doMeeting() {
   $('#meetOut').innerHTML = '<div class="hint">Analyzing…</div>';
   try {
     const r = await window.clarity.meeting({ line });
-    $('#meetOut').innerHTML = renderMarkdown(r.content || r.reasoning || '(no content)');
+    $('#meetOut').innerHTML = answerHtml(r);
     setStatus(`Guidance updated · ${r.model} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#meetOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;
@@ -139,12 +167,15 @@ window.__clarityEngine = engine; // test seam: lets tests feed known PCM through
 
 engine.onStatus = (msg) => setStatus(msg);
 engine.onLoadProgress = (pct, file) => setStatus(`Loading speech model ${pct}% (${file})`, 'busy');
-engine.onTranscript = async (text, ms) => {
-  localTranscript.push(text);
+engine.onTranscript = async (text, speaker, ms) => {
+  const line = `${speaker}: ${text}`;
+  localTranscript.push(line);
   renderTranscript(localTranscript);
-  await window.clarity.addTranscript(text);
-  setStatus(`Heard: "${text.slice(0, 48)}" (${ms}ms)`);
-  if ($('#autoGuide').checked) doMeeting();
+  await window.clarity.addTranscript(line);
+  setStatus(`${speaker}: "${text.slice(0, 44)}" (${ms}ms)`);
+  // Only re-run guidance when the other side speaks — that's what you need a
+  // reply to. Re-running on your own words just talks back at you.
+  if ($('#autoGuide').checked && speaker === window.SPEAKER_THEM) doMeeting();
 };
 
 let listening = false;
@@ -158,7 +189,7 @@ async function toggleListening() {
       listening = true;
       btn.textContent = '■ Stop Listening';
       btn.classList.add('recording');
-      const srcs = [got.mic && 'mic', got.system && 'system audio'].filter(Boolean).join(' + ');
+      const srcs = [got.mic && 'You (mic)', got.system && 'Them (system audio)'].filter(Boolean).join(' + ');
       $('#listenState').textContent = `Live — capturing ${srcs}`;
       $('#listenState').classList.add('live');
       setStatus(`Listening (${srcs})`);
@@ -188,7 +219,7 @@ async function doScreen() {
   try {
     const dataUrl = await window.clarity.captureScreen();
     const r = await window.clarity.screen({ dataUrl, text: $('#screenInput').value.trim() });
-    $('#screenOut').innerHTML = renderMarkdown(r.content || r.reasoning || '(no content)');
+    $('#screenOut').innerHTML = answerHtml(r);
     setStatus(`Screen analyzed · ${r.model} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#screenOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;

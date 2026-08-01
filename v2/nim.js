@@ -48,7 +48,15 @@ async function chat({ model = DEFAULT_MODEL, messages, maxTokens = 1024, tempera
         const body = await res.text();
         throw new Error(`NIM ${res.status}: ${body.slice(0, 300)}`);
       }
-      return finalize(await res.json(), model, started);
+      const out = finalize(await res.json(), model, started);
+      // Reasoning ran past the budget before producing an answer — give it
+      // more room once rather than surfacing a half-finished scratchpad.
+      if (out.truncated && attempt < retries) {
+        maxTokens = Math.min(maxTokens * 3, 6000);
+        lastErr = new Error('reasoning truncated');
+        continue;
+      }
+      return out;
     } catch (e) {
       clearTimeout(timer);
       lastErr = e.name === 'AbortError' ? new Error(`NIM timeout after ${timeoutMs}ms`) : e;
@@ -63,13 +71,18 @@ async function chat({ model = DEFAULT_MODEL, messages, maxTokens = 1024, tempera
 }
 
 function finalize(data, model, started) {
-  const msg = data.choices?.[0]?.message || {};
+  const choice = data.choices?.[0] || {};
+  const msg = choice.message || {};
   // Reasoning models (e.g. inkling) put thoughts in reasoning_content; the
-  // answer is in content once the model finishes thinking.
+  // answer only lands in content once the model finishes thinking. If it runs
+  // out of budget mid-thought, content is empty and reasoning holds a partial
+  // scratchpad — which must never be shown as though it were the answer.
   return {
     model,
     content: msg.content || '',
     reasoning: msg.reasoning_content || '',
+    finishReason: choice.finish_reason || '',
+    truncated: !msg.content && choice.finish_reason === 'length',
     usage: data.usage || null,
     latencyMs: Date.now() - started
   };

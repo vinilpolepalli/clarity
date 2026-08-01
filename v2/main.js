@@ -99,7 +99,9 @@ ipcMain.handle('clarity:meeting', async (_e, { line }) => {
       { role: 'system', content: prompts.MEETING },
       { role: 'user', content: `Live transcript so far:\n${context}\n\nGive live guidance now.` }
     ],
-    maxTokens: 700
+    // Reasoning models spend most of a small budget thinking; leave headroom
+    // so the answer itself actually lands.
+    maxTokens: 1600
   });
   return { ...r, transcriptLen: state.transcript.length };
 });
