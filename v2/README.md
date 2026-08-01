@@ -10,7 +10,7 @@ A from-scratch rebuild of Clarity as a **Cluely-style undetectable AI meeting co
 | **Listen** | **Genuinely live** meeting copilot — captures mic + system audio, transcribes on-device with Whisper, and auto-produces a rolling **Summary / Suggested response / Next actions** as people speak | Whisper + inkling |
 | **Code** | Coding-interview / engineering copilot — **Approach / Solution / Complexity** with a complete runnable solution | selected NIM model |
 | **Screen** | Screenshots your screen (`desktopCapturer`), downscales to JPEG, and reads it with a vision model to tell you what to do | Llama 3.2 Vision |
-| **Models** | Live dashboard that pings every NIM model, shows online/offline status + latency, and lets you switch the active model | — |
+| **Models** | Live dashboard of **every model your key can reach** (~100), filterable by name and kind, with cached health checks and latency. Click to switch the active model, or open the full catalogue at [build.nvidia.com/models](https://build.nvidia.com/models) | — |
 
 ### Undetectable
 
@@ -36,6 +36,24 @@ Dictation transcribes **one microphone**, on purpose, for the person holding it.
 | System / loopback | `Them` | the question you actually need a reply to |
 
 Each stream gets its own VAD state, so you and the other party can talk over each other without merging into one garbled utterance. Every transcript line is labelled, the guidance model is told to anchor on the newest `Them:` line, and auto-guidance only re-fires when *they* speak — otherwise the overlay just talks back at you.
+
+### Choosing a speech model
+
+Whisper runs on-device — **no API key, no cost, no network at inference time**. Set `CLARITY_ASR_MODEL` to trade accuracy against speed. Measured on the same 11s clip at three noise levels (word error rate), and in-app transcription speed:
+
+| Model | Size | Clean | Moderate noise | Heavy noise | In-app speed |
+|---|---|---|---|---|---|
+| `Xenova/whisper-tiny.en` | 41 MB | 0% | 68% | 45% | **0.42× realtime** |
+| `Xenova/whisper-base.en` | 77 MB | 5% | 18% | 100% (collapsed) | ~0.6× |
+| `Xenova/whisper-small.en` (default) | 249 MB | 0% | 14% | **0%** | **1.7× realtime** |
+
+Real meetings are the noisy columns. `base` is erratic and can fail outright, so the useful choice is `tiny` (fast) or `small` (robust). `small` is the default; **if transcription can't keep up, the app tells you and names the switch** — a model slower than realtime queues without bound and ends up answering what was said minutes ago.
+
+```bash
+CLARITY_ASR_MODEL=Xenova/whisper-tiny.en npm start   # if small lags on your machine
+```
+
+Speeds above are from a throttled 4-core CI container; Apple Silicon should be materially faster.
 
 ### How transcription works
 
@@ -84,3 +102,12 @@ Cluely ships only macOS/Windows binaries, so a literal side-by-side install and 
 Two platform caveats are worth being explicit about:
 - `setContentProtection` is enforced by the OS compositor. It is fully effective on macOS and Windows; on Linux/X11 there is no equivalent guarantee.
 - System (loopback) audio capture depends on the platform providing a loopback device. Where it is unavailable the app degrades to microphone-only and says so in the UI.
+
+## Resilience
+
+Two failure modes matter for a live tool, and both are handled rather than hidden:
+
+- **A stalled model.** During development `thinkingmachines/inkling` began returning HTTP 504 after ~300s. A copilot that hangs is worse than a weaker one that answers, because the moment to speak passes. Interactive calls now get one short attempt (20s) before falling back to a fast model, and the status line names the fallback so a degraded answer is never mistaken for a normal one.
+- **Transcription falling behind.** If the speech model is slower than realtime the queue grows without bound — memory climbs and guidance starts answering minutes-old speech. The engine detects the backlog and surfaces it with the fix.
+
+Health checks distinguish **rate limited** from **unreachable**: a 429 is our own request budget, not a model being down, and reporting it as offline would be wrong.

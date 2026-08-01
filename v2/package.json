@@ -19,6 +19,7 @@
     "playwright": "^1.49.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1"
+    "@huggingface/transformers": "^3.8.1",
+    "electron-audio-loopback": "^1.0.6"
   }
 }

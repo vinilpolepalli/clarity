@@ -121,6 +121,11 @@ function thinkingHtml(reasoning) {
   if (!reasoning) return '';
   return `<details class="thinking"><summary>Model's reasoning</summary><div>${renderMarkdown(reasoning)}</div></details>`;
 }
+/** Name the model that actually served the reply, flagging any fallback. */
+function modelNote(r) {
+  return r.fellBackFrom ? `${r.model} (fell back from ${r.fellBackFrom})` : r.model;
+}
+
 window.__answerHtml = answerHtml; // test seam
 window.__renderMarkdown = renderMarkdown; // test seam
 
@@ -128,7 +133,7 @@ window.__renderMarkdown = renderMarkdown; // test seam
 function activateTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $$('.panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
-  if (name === 'models') refreshModels();
+  if (name === 'models') loadCatalog();
 }
 $$('.tab').forEach((t) => t.addEventListener('click', () => activateTab(t.dataset.tab)));
 
@@ -142,7 +147,7 @@ async function doAsk() {
   try {
     const r = await window.clarity.ask({ text });
     $('#askOut').innerHTML = answerHtml(r);
-    setStatus(`Answered · ${r.model} · ${r.latencyMs}ms`);
+    setStatus(`Answered · ${modelNote(r)} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#askOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;
     setStatus('Error', 'err');
@@ -163,7 +168,7 @@ async function doCode() {
   try {
     const r = await window.clarity.code({ text });
     $('#codeOut').innerHTML = answerHtml(r);
-    setStatus(`Code ready · ${r.model} · ${r.latencyMs}ms`);
+    setStatus(`Code ready · ${modelNote(r)} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#codeOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;
     setStatus('Error', 'err');
@@ -197,7 +202,7 @@ async function doMeeting() {
   try {
     const r = await window.clarity.meeting({ line });
     $('#meetOut').innerHTML = answerHtml(r);
-    setStatus(`Guidance updated · ${r.model} · ${r.latencyMs}ms`);
+    setStatus(`Guidance updated · ${modelNote(r)} · ${r.latencyMs}ms`);
   } catch (e) {
     $('#meetOut').innerHTML = `<div class="hint">Error: ${escapeHtml(String(e.message || e))}</div>`;
     setStatus('Error', 'err');
@@ -213,6 +218,16 @@ const engine = new window.AudioEngine();
 window.__clarityEngine = engine; // test seam: lets tests feed known PCM through the real pipeline
 
 engine.onStatus = (msg) => setStatus(msg);
+engine.onLag = (lagging, depth) => {
+  const el = $('#listenState');
+  if (lagging) {
+    el.textContent = `Transcription is behind (${depth} queued) — set CLARITY_ASR_MODEL=Xenova/whisper-tiny.en for a faster model`;
+    el.classList.add('lagging');
+    setStatus('Speech model slower than realtime', 'err');
+  } else {
+    el.classList.remove('lagging');
+  }
+};
 engine.onLoadProgress = (pct, file) => setStatus(`Loading speech model ${pct}% (${file})`, 'busy');
 engine.onTranscript = async (text, speaker, ms) => {
   const line = `${speaker}: ${text}`;
@@ -278,24 +293,57 @@ async function doScreen() {
 $('#screenGo').addEventListener('click', doScreen);
 
 // ---- Models dashboard ----
+// Shows every model the key can actually reach (~100), not a hardcoded subset.
+// Health checks cost one request each, so results are cached on disk for a day
+// and only re-run on demand.
 let currentModel = null;
 let modelMeta = [];
+let healthMap = {};
+
+const timeAgo = (ts) => {
+  if (!ts) return 'never checked';
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return 'checked just now';
+  if (m < 60) return `checked ${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `checked ${h}h ago` : `checked ${Math.round(h / 24)}d ago`;
+};
+
 function modelCardHtml(m, ping) {
-  const dot = !ping ? 'pending' : ping.ok ? 'ok' : 'bad';
-  const stat = !ping ? 'pinging…' : ping.ok ? `${ping.latencyMs}ms` : 'error';
+  const dot = !ping ? '' : ping.ok ? 'ok' : ping.limited ? 'pending' : 'bad';
+  const stat = !ping
+    ? 'not checked'
+    : ping.ok
+      ? `${ping.latencyMs}ms`
+      : ping.limited
+        ? 'rate limited'
+        : 'unreachable';
   const sel = m.id === currentModel ? ' selected' : '';
-  return `<div class="model-card${sel}" data-id="${m.id}">
+  return `<div class="model-card${sel}" data-id="${escapeHtml(m.id)}">
     <div class="name"><span class="status-dot ${dot}"></span>${escapeHtml(m.label)}</div>
     <div class="id">${escapeHtml(m.id)}</div>
     <div class="meta"><span class="badge">${m.kind}</span><span>${stat}</span></div>
   </div>`;
 }
-function paintModels(pings) {
+
+function visibleModels() {
+  const q = ($('#modelSearch').value || '').toLowerCase().trim();
+  const kind = $('#kindFilter').value;
+  return modelMeta.filter(
+    (m) => (!kind || m.kind === kind) && (!q || m.id.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
+  );
+}
+
+function paintModels() {
+  const list = visibleModels();
   const grid = $('#modelGrid');
-  grid.innerHTML = modelMeta.map((m) => modelCardHtml(m, pings[m.id])).join('');
+  grid.innerHTML = list.length
+    ? list.map((m) => modelCardHtml(m, healthMap[m.id])).join('')
+    : '<div class="hint">No models match that filter.</div>';
   $$('.model-card').forEach((card) => card.addEventListener('click', () => selectModel(card.dataset.id)));
   $('#activeModel').textContent = currentModel || '—';
 }
+
 async function selectModel(id) {
   await window.clarity.setModel(id);
   currentModel = id;
@@ -303,20 +351,56 @@ async function selectModel(id) {
   $('#activeModel').textContent = id;
   setStatus(`Active model → ${id}`);
 }
-async function refreshModels() {
+
+async function loadCatalog() {
   const st = await window.clarity.getState();
-  modelMeta = st.models;
   currentModel = st.model;
-  paintModels({}); // pending state
-  setStatus('Pinging models…', 'busy');
-  const results = await window.clarity.listModels();
-  const byId = {};
-  results.forEach((r) => (byId[r.id] = r));
-  paintModels(byId);
-  const okCount = results.filter((r) => r.ok).length;
-  setStatus(`Models: ${okCount}/${results.length} online`);
+  try {
+    const cat = await window.clarity.catalog();
+    modelMeta = cat.models;
+    healthMap = cat.health || {};
+    $('#checkedAt').textContent = `${modelMeta.length} models · ${timeAgo(cat.checkedAt)}`;
+  } catch (e) {
+    // Offline or bad key — fall back to the curated roster so the tab still works.
+    modelMeta = st.models;
+    $('#checkedAt').textContent = 'catalogue unavailable — showing curated list';
+  }
+  paintModels();
 }
+
+async function refreshModels() {
+  if (!modelMeta.length) await loadCatalog();
+  setStatus('Checking curated models…', 'busy');
+  const results = await window.clarity.listModels();
+  results.forEach((r) => { healthMap[r.id] = r; });
+  paintModels();
+  $('#checkedAt').textContent = `${modelMeta.length} models · checked just now`;
+  setStatus(`Curated: ${results.filter((r) => r.ok).length}/${results.length} online`);
+}
+
+async function checkAllModels() {
+  if (!modelMeta.length) await loadCatalog();
+  const ids = visibleModels().map((m) => m.id);
+  $('#checkAll').disabled = true;
+  setStatus(`Checking ${ids.length} models…`, 'busy');
+  try {
+    const { results, checkedAt } = await window.clarity.healthCheck(ids);
+    results.forEach((r) => { healthMap[r.id] = r; });
+    paintModels();
+    $('#checkedAt').textContent = `${modelMeta.length} models · ${timeAgo(checkedAt)}`;
+    setStatus(`${results.filter((r) => r.ok).length}/${results.length} models online`);
+  } catch (e) {
+    setStatus(`Health check failed: ${e.message}`, 'err');
+  } finally {
+    $('#checkAll').disabled = false;
+  }
+}
+
+window.clarity.onHealthProgress(({ done, total }) => setStatus(`Checking models… ${done}/${total}`, 'busy'));
 $('#refreshModels').addEventListener('click', refreshModels);
+$('#checkAll').addEventListener('click', checkAllModels);
+$('#modelSearch').addEventListener('input', paintModels);
+$('#kindFilter').addEventListener('change', paintModels);
 $('#browseCatalog').addEventListener('click', async () => {
   const { url } = await window.clarity.openCatalog();
   setStatus(`Opened ${url}`);

@@ -233,6 +233,7 @@ body { -webkit-font-smoothing: antialiased; }
 }
 .listen-state { font-size: 12px; color: var(--muted); flex: 1; }
 .listen-state.live { color: var(--ok); }
+.listen-state.lagging { color: var(--warn); }
 .auto-toggle { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .auto-toggle input { accent-color: var(--accent); }
 
@@ -261,6 +262,10 @@ body { -webkit-font-smoothing: antialiased; }
 /* ---- Models dashboard ---- */
 .models-head { display: flex; align-items: center; justify-content: space-between; }
 .models-actions { display: flex; align-items: center; gap: 10px; }
+.models-filter { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+.models-filter .prompt { padding: 8px 12px; font-size: 12.5px; }
+.prompt.kind { flex: 0 0 140px; }
+.checked-at { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .link-btn {
   border: 0; background: transparent; cursor: pointer;
   color: var(--accent-2); font-size: 11.5px; font-weight: 550; padding: 6px 2px;

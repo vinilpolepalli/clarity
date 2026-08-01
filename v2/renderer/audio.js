@@ -17,6 +17,8 @@ const SPEECH_RMS = 0.008;       // above this = speech
 const SILENCE_HANG_MS = 700;    // trailing silence that closes an utterance
 const MIN_UTTERANCE_MS = 600;   // ignore blips
 const MAX_UTTERANCE_MS = 12000; // force-flush long monologues
+// Queue depth at which transcription is demonstrably not keeping up.
+const LAG_UTTERANCES = 3;
 
 const SPEAKER_YOU = 'You';
 const SPEAKER_THEM = 'Them';
@@ -94,9 +96,13 @@ class AudioEngine {
       [SPEAKER_THEM]: new Track(SPEAKER_THEM, emit)
     };
 
+    this.queuedSec = 0;
+    this.lagging = false;
+
     this.onTranscript = () => {};
     this.onStatus = () => {};
     this.onLoadProgress = () => {};
+    this.onLag = () => {};
   }
 
   initWorker() {
@@ -110,21 +116,45 @@ class AudioEngine {
       } else if (m.type === 'load-progress') {
         this.onLoadProgress(m.pct, m.file);
       } else if (m.type === 'transcript') {
-        const speaker = this.pending.get(m.id) || SPEAKER_YOU;
+        const rec = this.pending.get(m.id);
         this.pending.delete(m.id);
-        if (m.text) this.onTranscript(m.text, speaker, m.ms);
+        if (this.lagging && this.pending.size === 0) {
+          this.lagging = false;
+          this.onLag(false, 0);
+        }
+        if (m.text) this.onTranscript(m.text, (rec && rec.speaker) || SPEAKER_YOU, m.ms);
       } else if (m.type === 'error') {
         this.pending.delete(m.id);
         this.onStatus(`ASR error: ${m.error}`);
       }
     };
-    this.worker.postMessage({ type: 'warmup' });
+    // Configure before warmup: model and thread count must be set before the
+    // first load, since that is when the session is created.
+    window.clarity
+      .asrConfig(navigator.hardwareConcurrency)
+      .catch(() => ({}))
+      .then(({ model, threads } = {}) => {
+        if (model) this.model = model;
+        // Always send configure — the worker blocks on it, so a failed lookup
+        // must still unblock with defaults rather than hang transcription.
+        this.worker.postMessage({ type: 'configure', model, threads });
+        this.worker.postMessage({ type: 'warmup' });
+        if (model) this.onStatus(`Speech model ${model.split('/').pop()} · ${threads} thread(s)`);
+      });
     return this.worker;
   }
 
   transcribe(pcm, speaker) {
     const id = ++this.seq;
-    this.pending.set(id, speaker);
+    this.pending.set(id, { speaker, queuedAt: Date.now(), sec: pcm.length / TARGET_SR });
+    this.queuedSec += pcm.length / TARGET_SR;
+    // Backpressure. If the model is slower than realtime the queue grows without
+    // bound: memory climbs and guidance starts answering what was said minutes
+    // ago. Surface it instead of silently drifting.
+    if (this.pending.size >= LAG_UTTERANCES && !this.lagging) {
+      this.lagging = true;
+      this.onLag(true, this.pending.size);
+    }
     this.initWorker().postMessage({ type: 'transcribe', id, pcm }, [pcm.buffer]);
   }
 
@@ -154,6 +184,32 @@ class AudioEngine {
       out[i] = src[i0] * (1 - frac) + src[Math.min(i0 + 1, src.length - 1)] * frac;
     }
     return out;
+  }
+
+  /**
+   * Grab the system/loopback stream. Returns null when the platform simply
+   * cannot provide one, so the caller can degrade to microphone-only.
+   */
+  async captureSystemAudio() {
+    try {
+      await window.clarity.enableLoopback();
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      stream.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
+      await window.clarity.disableLoopback();
+      if (stream.getAudioTracks().length) return stream;
+    } catch (e) {
+      try { await window.clarity.disableLoopback(); } catch { /* nothing to undo */ }
+    }
+    // Legacy path — works on Linux/Windows, never on macOS.
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        audio: { mandatory: { chromeMediaSource: 'desktop' } },
+        video: { mandatory: { chromeMediaSource: 'desktop' } }
+      });
+      s.getVideoTracks().forEach((t) => t.stop());
+      if (s.getAudioTracks().length) return s;
+    } catch { /* fall through to mic-only */ }
+    return null;
   }
 
   /** Wire one MediaStream to its own VAD track. */
@@ -195,19 +251,15 @@ class AudioEngine {
       this.onStatus(`Mic unavailable: ${e.message}`);
     }
 
-    // System/loopback audio — the other side of the call.
-    try {
-      const sys = await navigator.mediaDevices.getUserMedia({
-        audio: { mandatory: { chromeMediaSource: 'desktop' } },
-        video: { mandatory: { chromeMediaSource: 'desktop' } }
-      });
-      sys.getVideoTracks().forEach((t) => t.stop());
-      if (sys.getAudioTracks().length) {
-        this.streams.push(sys);
-        this.tap(sys, SPEAKER_THEM);
-        got.system = true;
-      }
-    } catch (e) {
+    // System/loopback audio — the other side of the call. Try the loopback path
+    // first (the only one that works on macOS), then the legacy desktop
+    // constraints, then give up gracefully to mic-only.
+    const sys = await this.captureSystemAudio();
+    if (sys) {
+      this.streams.push(sys);
+      this.tap(sys, SPEAKER_THEM);
+      got.system = true;
+    } else {
       this.onStatus('System audio unavailable — capturing your mic only');
     }
 

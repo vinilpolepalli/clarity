@@ -18,6 +18,24 @@ const MODELS = [
 ];
 
 const VISION_MODEL = 'meta/llama-3.2-11b-vision-instruct';
+// Used when the chosen model stalls or errors. Small, fast and consistently
+// available — the point is to answer at all, not to answer best.
+const FALLBACK_MODEL = 'meta/llama-3.1-8b-instruct';
+
+/**
+ * Interactive wrapper. A meeting copilot has to fail fast: a model that hangs
+ * is worse than a weaker model that replies, because the moment to say
+ * something passes. So the primary gets one short attempt, then we fall back.
+ */
+async function chatOrFallback(opts) {
+  try {
+    return await chat({ ...opts, timeoutMs: opts.timeoutMs || 20000, retries: 0 });
+  } catch (primaryErr) {
+    if (opts.model === FALLBACK_MODEL) throw primaryErr;
+    const r = await chat({ ...opts, model: FALLBACK_MODEL, timeoutMs: 25000, retries: 1 });
+    return { ...r, fellBackFrom: opts.model, fallbackReason: String(primaryErr.message || primaryErr).slice(0, 120) };
+  }
+}
 
 function apiKey() {
   return process.env.NVIDIA_API_KEY || '';
@@ -102,7 +120,7 @@ async function pingModel(id) {
       maxTokens: id === DEFAULT_MODEL ? 256 : 16,
       temperature: 0,
       timeoutMs: 25000,
-      retries: 0
+      retries: 1
     });
     return {
       id,
@@ -111,7 +129,17 @@ async function pingModel(id) {
       sample: (r.content || r.reasoning || '').slice(0, 60)
     };
   } catch (e) {
-    return { id, ok: false, latencyMs: Date.now() - started, error: String(e.message || e).slice(0, 200) };
+    const msg = String(e.message || e);
+    // A 429 means our own request budget ran out, not that the model is down.
+    // Reporting it as unreachable would tell you a healthy model is offline.
+    const limited = /NIM 429/.test(msg);
+    return {
+      id,
+      ok: false,
+      limited,
+      latencyMs: Date.now() - started,
+      error: msg.slice(0, 200)
+    };
   }
 }
 
@@ -121,7 +149,42 @@ async function listRemoteModels() {
   });
   if (!res.ok) throw new Error(`NIM ${res.status}`);
   const data = await res.json();
-  return data.data.map((m) => m.id);
+  return data.data.map((m) => m.id).sort();
 }
 
-module.exports = { chat, pingModel, listRemoteModels, MODELS, DEFAULT_MODEL, VISION_MODEL, CATALOG_URL };
+const KIND = (id) =>
+  /vision|vlm|vila|image/.test(id) ? 'vision'
+  : /embed|rerank/.test(id) ? 'embed'
+  : /inkling|reason|think|r1/.test(id) ? 'reasoning'
+  : 'chat';
+
+const label = (id) =>
+  id.split('/').pop().replace(/-instruct$/, '').replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** Describe every model the key can actually reach, not a hardcoded subset. */
+async function catalog() {
+  const ids = await listRemoteModels();
+  return ids.map((id) => ({ id, label: label(id), kind: KIND(id) }));
+}
+
+/**
+ * Health-check many models without tripping the rate limiter. NIM throttles
+ * bursts hard, so this runs a bounded number at a time rather than all at once.
+ */
+async function pingAll(ids, { concurrency = 4, onProgress } = {}) {
+  const out = [];
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, ids.length) }, async () => {
+    while (next < ids.length) {
+      const i = next++;
+      const r = await pingModel(ids[i]);
+      out.push(r);
+      if (onProgress) onProgress(out.length, ids.length);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+module.exports = { chat, chatOrFallback, FALLBACK_MODEL, pingModel, listRemoteModels, catalog, pingAll, MODELS, DEFAULT_MODEL, VISION_MODEL, CATALOG_URL };

@@ -4,7 +4,7 @@ import { pipeline, env } from '@huggingface/transformers';
 
 // Serve the ONNX WASM binaries from node_modules instead of a CDN.
 env.backends.onnx.wasm.wasmPaths = '../node_modules/@huggingface/transformers/dist/';
-env.backends.onnx.wasm.numThreads = 1;
+
 
 // Load weights from the bundled models/ directory (populated by
 // scripts/fetch-model.js) so transcription works offline and starts instantly.
@@ -12,9 +12,15 @@ env.allowRemoteModels = false;
 env.allowLocalModels = true;
 env.localModelPath = '../models/';
 
-const MODEL = 'Xenova/whisper-tiny.en';
+let MODEL = 'Xenova/whisper-small.en';
 let transcriber = null;
 let loading = null;
+
+// The host configures the model and thread count over a message, but a
+// transcribe request can arrive first. Hold every request until configuration
+// lands, otherwise the first load silently pins the default model.
+let markConfigured;
+const configured = new Promise((resolve) => { markConfigured = resolve; });
 
 async function getTranscriber() {
   if (transcriber) return transcriber;
@@ -40,7 +46,15 @@ async function getTranscriber() {
 }
 
 self.onmessage = async (e) => {
-  const { type, id, pcm } = e.data;
+  const { type, id, pcm, model, threads } = e.data;
+  if (type === 'configure') {
+    // Applied before the first load; changing the model later means a reload.
+    if (model) MODEL = model;
+    if (threads) env.backends.onnx.wasm.numThreads = threads;
+    markConfigured();
+    return;
+  }
+  await configured;
   try {
     if (type === 'warmup') {
       await getTranscriber();

@@ -95,6 +95,9 @@ test('Ask calls NIM and renders an answer', async () => {
   await expect(win.locator('#status')).toContainText(/Answered|Error/, { timeout: 90000 });
   const status = await win.locator('#status').textContent();
   expect(status, `Ask status was: ${status}`).toContain('Answered');
+  // Either the chosen model replied, or it stalled and the fallback covered it.
+  // Both are acceptable; silence is not.
+  expect(await win.locator('#askOut').textContent()).not.toMatch(/^\s*$/);
   await shot('02-ask.png');
 });
 
@@ -312,6 +315,7 @@ test('global hotkeys are registered and drive the UI', async () => {
 
 test('switching model actually routes the next request to it', async () => {
   await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('#modelSearch').fill('llama-3.1-8b-instruct');
   await win.locator('.model-card[data-id="meta/llama-3.1-8b-instruct"]').click();
   await expect(win.locator('#activeModel')).toHaveText('meta/llama-3.1-8b-instruct');
 
@@ -324,8 +328,10 @@ test('switching model actually routes the next request to it', async () => {
 
   // restore the default
   await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('#modelSearch').fill('inkling');
   await win.locator('.model-card[data-id="thinkingmachines/inkling"]').click();
   await expect(win.locator('#activeModel')).toHaveText('thinkingmachines/inkling');
+  await win.locator('#modelSearch').fill('');
 });
 
 test('code answers render as highlighted code blocks', async () => {
@@ -412,23 +418,50 @@ test('material adapts to a bright backdrop and holds contrast', async () => {
   await expect.poll(() => win.evaluate(() => document.body.classList.contains('light-backdrop'))).toBe(false);
 });
 
-test('Models dashboard pings NIM models', async () => {
+test('Models dashboard lists the live catalogue and health-checks it', async () => {
   await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('#modelSearch').fill('');
+  await win.locator('#kindFilter').selectOption('');
+  // The catalogue is whatever the key can actually reach, not a hardcoded list.
+  await expect.poll(() => win.locator('.model-card').count(), { timeout: 60000 }).toBeGreaterThan(20);
+  await expect(win.locator('#checkedAt')).toContainText(/\d+ models/);
+
   await win.locator('#refreshModels').click();
-  await expect(win.locator('.model-card')).toHaveCount(8, { timeout: 5000 });
-  await expect(win.locator('#status')).toContainText(/Models: \d+\/\d+ online/, { timeout: 60000 });
-  // at least one online, and inkling default is selected
+  await expect(win.locator('#status')).toContainText(/Curated: \d+\/\d+ online/, { timeout: 90000 });
   await expect(win.locator('.model-card .status-dot.ok').first()).toBeVisible();
   await shot('05-models.png');
 });
 
+test('catalogue filters by text and by kind', async () => {
+  await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('#modelSearch').fill('');
+  await win.locator('#kindFilter').selectOption('');
+  await expect.poll(() => win.locator('.model-card').count(), { timeout: 60000 }).toBeGreaterThan(20);
+  const all = await win.locator('.model-card').count();
+
+  await win.locator('#modelSearch').fill('inkling');
+  await expect.poll(() => win.locator('.model-card').count()).toBeLessThan(all);
+  await expect(win.locator('.model-card').first()).toContainText('inkling');
+
+  await win.locator('#modelSearch').fill('');
+  await win.locator('#kindFilter').selectOption('vision');
+  const visionCount = await win.locator('.model-card').count();
+  expect(visionCount).toBeGreaterThan(0);
+  expect(visionCount).toBeLessThan(all);
+  for (const t of await win.locator('.model-card .badge').allTextContents()) expect(t).toBe('vision');
+
+  await win.locator('#kindFilter').selectOption('');
+});
+
 test('selecting a model updates active model', async () => {
   await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('#modelSearch').fill('llama-3.1-8b-instruct');
   await win.locator('.model-card[data-id="meta/llama-3.1-8b-instruct"]').click();
   await expect(win.locator('#activeModel')).toHaveText('meta/llama-3.1-8b-instruct');
-  // restore default
+  await win.locator('#modelSearch').fill('inkling');
   await win.locator('.model-card[data-id="thinkingmachines/inkling"]').click();
   await expect(win.locator('#activeModel')).toHaveText('thinkingmachines/inkling');
+  await win.locator('#modelSearch').fill('');
 });
 
 test('top-bar hide toggle works', async () => {

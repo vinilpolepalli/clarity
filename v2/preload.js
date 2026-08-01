@@ -16,5 +16,13 @@ contextBridge.exposeInMainWorld('clarity', {
   quit: () => ipcRenderer.invoke('clarity:quit'),
   openCatalog: () => ipcRenderer.invoke('clarity:openCatalog'),
   backdropLuma: () => ipcRenderer.invoke('clarity:backdropLuma'),
+  asrConfig: (cores) => ipcRenderer.invoke('clarity:asrConfig', cores),
+  catalog: () => ipcRenderer.invoke('clarity:catalog'),
+  healthCheck: (ids) => ipcRenderer.invoke('clarity:healthCheck', ids),
+  onHealthProgress: (cb) => ipcRenderer.on('clarity:healthProgress', (_e, p) => cb(p)),
+  // A MediaStream cannot cross contextBridge, so only the enable/disable hooks
+  // are exposed; getDisplayMedia itself is called in the page.
+  enableLoopback: () => ipcRenderer.invoke('enable-loopback-audio'),
+  disableLoopback: () => ipcRenderer.invoke('disable-loopback-audio'),
   onHotkey: (cb) => ipcRenderer.on('clarity:hotkey', (_e, name) => cb(name))
 });

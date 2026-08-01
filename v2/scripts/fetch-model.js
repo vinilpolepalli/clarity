@@ -6,7 +6,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const MODEL = 'Xenova/whisper-tiny.en';
+const asr = require('../asr');
+// Fetch whichever model is configured (CLARITY_ASR_MODEL), plus tiny as a
+// fallback so dropping to it later needs no download mid-meeting.
+const MODEL = asr.model();
 const FILES = [
   'config.json',
   'generation_config.json',
@@ -16,10 +19,12 @@ const FILES = [
   'onnx/encoder_model_quantized.onnx',
   'onnx/decoder_model_merged_quantized.onnx'
 ];
-const DEST = path.join(__dirname, '..', 'models', MODEL);
-const BASE = `https://huggingface.co/${MODEL}/resolve/main`;
 
-async function main() {
+
+async function fetchModel(id) {
+  const DEST = path.join(__dirname, '..', 'models', id);
+  const BASE = `https://huggingface.co/${id}/resolve/main`;
+  console.log(`\n${id}`);
   let fetched = 0;
   for (const rel of FILES) {
     const out = path.join(DEST, rel);
@@ -36,7 +41,13 @@ async function main() {
     fetched++;
     console.log(`${(buf.length / 1e6).toFixed(1)} MB`);
   }
-  console.log(`Speech model ready at models/${MODEL} (${fetched} newly downloaded)`);
+  console.log(`  ready at models/${id} (${fetched} newly downloaded)`);
+}
+
+async function main() {
+  // Always keep tiny available as the quick fallback.
+  const wanted = [...new Set([MODEL, 'Xenova/whisper-tiny.en'])];
+  for (const id of wanted) await fetchModel(id);
 }
 
 main().catch((e) => {

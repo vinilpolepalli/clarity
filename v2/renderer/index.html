@@ -105,8 +105,20 @@
           <div class="col-title">NVIDIA NIM model status</div>
           <div class="models-actions">
             <button id="browseCatalog" class="link-btn" title="Open build.nvidia.com/models">Browse catalog ↗</button>
-            <button id="refreshModels" class="send small">Refresh</button>
+            <button id="refreshModels" class="send small">Check curated</button>
+            <button id="checkAll" class="send small" title="Health-check every model your key can reach">Check all</button>
           </div>
+        </div>
+        <div class="models-filter">
+          <input id="modelSearch" class="prompt" type="text" placeholder="Filter models…" />
+          <select id="kindFilter" class="prompt kind">
+            <option value="">All kinds</option>
+            <option value="chat">Chat</option>
+            <option value="reasoning">Reasoning</option>
+            <option value="vision">Vision</option>
+            <option value="embed">Embedding</option>
+          </select>
+          <span id="checkedAt" class="checked-at"></span>
         </div>
         <div id="modelGrid" class="model-grid"><div class="hint">Click Refresh to ping every model.</div></div>
         <div class="active-model">Active model: <b id="activeModel">—</b></div>

@@ -1,6 +1,23 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, screen, shell } = require('electron');
+
+// Whisper runs on WASM, which needs SharedArrayBuffer for multithreading.
+// Chromium gates SAB behind cross-origin isolation, which a file:// renderer
+// can never satisfy — so without this the speech model is pinned to one core.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
+
+// System (loopback) audio — the other side of the call. Stock Electron cannot
+// capture it on macOS at all; this shim enables the CoreAudio tap and registers
+// the display-media handler. It merges with the feature switch set above rather
+// than replacing it, so it must be initialised after that line.
+try {
+  require('electron-audio-loopback').initMain({ forceCoreAudioTap: true });
+} catch (e) {
+  console.warn('System audio loopback unavailable:', e.message);
+}
 const path = require('path');
+const fs = require('fs');
 const nim = require('./nim');
+const asr = require('./asr');
 const prompts = require('./prompts');
 
 let win = null;
@@ -79,7 +96,7 @@ ipcMain.handle('clarity:setModel', (_e, id) => {
 });
 
 ipcMain.handle('clarity:ask', async (_e, { text }) => {
-  const r = await nim.chat({
+  const r = await nim.chatOrFallback({
     model: state.model,
     messages: [
       { role: 'system', content: prompts.ASK },
@@ -90,7 +107,7 @@ ipcMain.handle('clarity:ask', async (_e, { text }) => {
 });
 
 ipcMain.handle('clarity:code', async (_e, { text }) => {
-  const r = await nim.chat({
+  const r = await nim.chatOrFallback({
     model: state.model,
     messages: [
       { role: 'system', content: prompts.CODE },
@@ -104,7 +121,7 @@ ipcMain.handle('clarity:code', async (_e, { text }) => {
 ipcMain.handle('clarity:meeting', async (_e, { line }) => {
   if (line && line.trim()) state.transcript.push(line.trim());
   const context = state.transcript.slice(-40).join('\n');
-  const r = await nim.chat({
+  const r = await nim.chatOrFallback({
     model: state.model,
     messages: [
       { role: 'system', content: prompts.MEETING },
@@ -152,7 +169,53 @@ ipcMain.handle('clarity:screen', async (_e, { dataUrl, text }) => {
 
 ipcMain.handle('clarity:models', async () => {
   const results = await Promise.all(nim.MODELS.map((m) => nim.pingModel(m.id)));
+  results.forEach(recordHealth);
+  saveHealth();
   return results;
+});
+
+// ---- Model catalogue + cached health ----
+// Health checks cost a real request per model, and there are ~100 of them, so
+// results are cached on disk and only re-run when stale (or forced).
+const HEALTH_TTL_MS = 24 * 60 * 60 * 1000;
+const healthPath = () => path.join(app.getPath('userData'), 'model-health.json');
+let health = { checkedAt: 0, models: {} };
+
+function loadHealth() {
+  try { health = JSON.parse(fs.readFileSync(healthPath(), 'utf8')); } catch { /* first run */ }
+}
+function saveHealth() {
+  try {
+    fs.mkdirSync(path.dirname(healthPath()), { recursive: true });
+    fs.writeFileSync(healthPath(), JSON.stringify(health));
+  } catch { /* cache is best-effort */ }
+}
+function recordHealth(r) {
+  health.models[r.id] = { ok: r.ok, limited: !!r.limited, latencyMs: r.latencyMs, error: r.error || null, at: Date.now() };
+  health.checkedAt = Date.now();
+}
+
+ipcMain.handle('clarity:catalog', async () => {
+  const models = await nim.catalog();
+  return {
+    models,
+    health: health.models,
+    checkedAt: health.checkedAt,
+    stale: Date.now() - health.checkedAt > HEALTH_TTL_MS
+  };
+});
+
+ipcMain.handle('clarity:healthCheck', async (e, ids) => {
+  const targets = (ids && ids.length ? ids : (await nim.catalog()).map((m) => m.id))
+    // Embedding/rerank models don't speak chat/completions; probing them is noise.
+    .filter((id) => !/embed|rerank/.test(id));
+  const results = await nim.pingAll(targets, {
+    concurrency: 4,
+    onProgress: (done, total) => e.sender.send('clarity:healthProgress', { done, total })
+  });
+  results.forEach(recordHealth);
+  saveHealth();
+  return { results, checkedAt: health.checkedAt };
 });
 
 ipcMain.handle('clarity:ping', async (_e, id) => nim.pingModel(id));
@@ -194,6 +257,12 @@ ipcMain.handle('clarity:backdropLuma', async () => {
   return { luma: n ? sum / n : 0 };
 });
 
+ipcMain.handle('clarity:asrConfig', (_e, cores) => ({
+  model: asr.model(),
+  threads: asr.threads(cores),
+  models: asr.MODELS
+}));
+
 ipcMain.handle('clarity:quit', () => app.quit());
 
 // The full NIM catalogue lives on the web; the dashboard only pings a curated
@@ -217,6 +286,7 @@ function registerHotkeys() {
 }
 
 app.whenReady().then(() => {
+  loadHealth();
   createWindow();
   registerHotkeys();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
