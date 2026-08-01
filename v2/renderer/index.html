@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clarity</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Real refraction. backdrop-filter: blur() only frosts — it cannot bend
+       light. This displacement map is neutral grey (no shift) across the middle
+       and diverges toward the borders, so feDisplacementMap samples the backdrop
+       from progressively further out near the rim: edge lensing, the way glass
+       with actual thickness behaves. R drives horizontal shift, G vertical. -->
+  <svg id="lgDefs" aria-hidden="true" width="0" height="0">
+    <defs>
+      <filter id="lgRefract" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+        <feImage preserveAspectRatio="none" x="0" y="0" width="100%" height="100%" result="map"
+          href="data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'100'%20height%3D'100'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'x'%20x1%3D'0'%20x2%3D'1'%20y1%3D'0'%20y2%3D'0'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'rgb(0%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'0.22'%20stop-color%3D'rgb(128%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'0.78'%20stop-color%3D'rgb(128%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'rgb(255%2C0%2C0)'%2F%3E%3C%2FlinearGradient%3E%3ClinearGradient%20id%3D'y'%20x1%3D'0'%20x2%3D'0'%20y1%3D'0'%20y2%3D'1'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'rgb(0%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'0.22'%20stop-color%3D'rgb(0%2C128%2C0)'%2F%3E%3Cstop%20offset%3D'0.78'%20stop-color%3D'rgb(0%2C128%2C0)'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'rgb(0%2C255%2C0)'%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D'100'%20height%3D'100'%20fill%3D'url(%23x)'%2F%3E%3Crect%20width%3D'100'%20height%3D'100'%20fill%3D'url(%23y)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3C%2Fsvg%3E" />
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="26"
+          xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- Screenshot harness only (?demo=1): an in-page mock meeting so the glass
+       has real content to refract. backdrop-filter cannot sample other windows. -->
+  <iframe id="demoBackdrop" src="../demo/backdrop.html" hidden></iframe>
+  <div id="app">
+    <!-- Top pill toolbar (Cluely-style) -->
+    <header id="bar" class="bar">
+      <div class="bar-left">
+        <span class="brand"><span class="dot"></span> Clarity</span>
+      </div>
+      <nav class="bar-tabs" id="tabs">
+        <button class="tab active" data-tab="ask" title="Ask (Ctrl+Enter)">Ask</button>
+        <button class="tab" data-tab="listen" title="Listen (Ctrl+Shift+M)">Listen</button>
+        <button class="tab" data-tab="code" title="Code (Ctrl+Shift+C)">Code</button>
+        <button class="tab" data-tab="screen" title="Screen (Ctrl+Shift+S)">Screen</button>
+        <button class="tab" data-tab="models" title="Model dashboard">Models</button>
+        <button class="tab" data-tab="settings" title="Settings">Settings</button>
+      </nav>
+      <div class="bar-right">
+        <button class="icon-btn on" id="stealthBtn" title="Undetectable: hidden from screen shares & recordings">🛡</button>
+        <button class="icon-btn" id="clickThroughBtn" title="Toggle click-through">👻</button>
+        <button class="icon-btn" id="hideBtn" title="Hide panel">▾</button>
+        <button class="icon-btn danger" id="quitBtn" title="Quit">✕</button>
+      </div>
+    </header>
+
+    <!-- Body -->
+    <main id="body" class="body">
+      <!-- ASK -->
+      <section class="panel active" data-panel="ask">
+        <div class="prompt-row">
+          <input id="askInput" class="prompt" type="text" placeholder="Ask anything…" />
+          <button id="askSend" class="send">Ask</button>
+        </div>
+        <div id="askOut" class="out"><div class="hint">Ask a question. Uses the selected NIM model.</div></div>
+      </section>
+
+      <!-- LISTEN / MEETING -->
+      <section class="panel" data-panel="listen">
+        <div class="listen-controls">
+          <button id="listenBtn" class="send listen-btn">● Start Listening</button>
+          <span id="listenState" class="listen-state">Idle — click to capture mic &amp; meeting audio</span>
+          <label class="auto-toggle"><input type="checkbox" id="autoGuide" checked /> Auto-guide</label>
+        </div>
+        <div class="prompt-row">
+          <input id="meetInput" class="prompt" type="text" placeholder="…or type what was just said" />
+          <button id="meetAdd" class="send">Add + Guide</button>
+        </div>
+        <div class="split">
+          <div class="col">
+            <div class="col-title">Live transcript</div>
+            <div id="transcript" class="transcript"><div class="hint">Lines you add appear here.</div></div>
+          </div>
+          <div class="col">
+            <div class="col-title">Live guidance</div>
+            <div id="meetOut" class="out"><div class="hint">Summary, suggested response & next actions.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CODE -->
+      <section class="panel" data-panel="code">
+        <div class="prompt-row">
+          <textarea id="codeInput" class="prompt area" placeholder="Describe the coding problem…"></textarea>
+          <button id="codeSend" class="send">Solve</button>
+        </div>
+        <div id="codeOut" class="out"><div class="hint">Generates a full, runnable solution.</div></div>
+      </section>
+
+      <!-- SCREEN -->
+      <section class="panel" data-panel="screen">
+        <div class="prompt-row">
+          <input id="screenInput" class="prompt" type="text" placeholder="What do you want to know about the screen?" />
+          <button id="screenGo" class="send">Capture + Analyze</button>
+        </div>
+        <div id="screenOut" class="out"><div class="hint">Screenshots your screen and reads it with a vision model.</div></div>
+      </section>
+
+      <!-- MODELS DASHBOARD -->
+      <section class="panel" data-panel="models">
+        <div class="models-head">
+          <div class="col-title">NVIDIA NIM model status</div>
+          <div class="models-actions">
+            <button id="browseCatalog" class="link-btn" title="Open build.nvidia.com/models">Browse catalog ↗</button>
+            <button id="refreshModels" class="send small">Check curated</button>
+            <button id="checkAll" class="send small" title="Health-check every model your key can reach">Check all</button>
+          </div>
+        </div>
+        <div class="models-filter">
+          <input id="modelSearch" class="prompt" type="text" placeholder="Filter models…" />
+          <select id="kindFilter" class="prompt kind">
+            <option value="">All kinds</option>
+            <option value="chat">Chat</option>
+            <option value="reasoning">Reasoning</option>
+            <option value="vision">Vision</option>
+            <option value="embed">Embedding</option>
+          </select>
+          <span id="checkedAt" class="checked-at"></span>
+        </div>
+        <div id="modelGrid" class="model-grid"><div class="hint">Click Refresh to ping every model.</div></div>
+        <div class="active-model">Active model: <b id="activeModel">—</b></div>
+      </section>
+      <!-- SETTINGS -->
+      <section class="panel" data-panel="settings">
+        <div class="settings-row">
+          <label for="apiKeyInput">NVIDIA NIM API key</label>
+          <div class="prompt-row">
+            <input id="apiKeyInput" class="prompt" type="password" placeholder="nvapi-…" autocomplete="off" />
+            <button id="saveKey" class="send">Save</button>
+          </div>
+          <span class="help">Stored locally on this machine only. Get one free at build.nvidia.com.</span>
+          <span id="keyState" class="key-state"></span>
+        </div>
+
+        <div class="settings-row">
+          <label>Appearance</label>
+          <div class="seg" id="themeSeg">
+            <button data-theme="shaded">Shaded</button>
+            <button data-theme="glass">Glass</button>
+          </div>
+          <span class="help">Shaded is a flat translucent scrim. Glass adds blur and edge refraction.</span>
+        </div>
+
+        <div class="settings-row">
+          <label>Speech model</label>
+          <div class="seg" id="asrSeg"></div>
+          <span class="help" id="asrHelp">Runs on your machine. Larger is far more accurate in noise but slower.</span>
+        </div>
+
+        <div class="settings-row">
+          <label>Diagnostics</label>
+          <div id="diag" class="help">—</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status" class="status">Ready</span>
+      <span class="spacer"></span>
+      <span class="kbd">⌘⏎ Ask</span>
+      <span class="kbd">⌘⇧M Listen</span>
+      <span class="kbd">⌘⇧C Code</span>
+      <span class="kbd">⌘⇧S Screen</span>
+    </footer>
+  </div>
+  <script src="audio.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
