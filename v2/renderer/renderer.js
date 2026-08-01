@@ -18,14 +18,60 @@ function renderMarkdown(md) {
   parts.forEach((chunk, i) => {
     if (i % 2 === 1) {
       const nl = chunk.indexOf('\n');
+      const lang = nl >= 0 ? chunk.slice(0, nl).trim().toLowerCase() : '';
       const body = nl >= 0 ? chunk.slice(nl + 1) : chunk;
-      html += `<pre><code>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`;
+      html += `<pre><code class="lang-${lang || 'txt'}">${highlight(body.replace(/\n$/, ''))}</code></pre>`;
     } else {
       html += renderInline(chunk);
     }
   });
   return html;
 }
+/**
+ * Small language-agnostic highlighter. Tokenises in one pass so the escaped
+ * output can never be re-tokenised — highlighting user/model text must not
+ * become an injection route.
+ */
+const KEYWORDS = new RegExp(
+  '\\b(' +
+    ['def','class','return','if','elif','else','for','while','in','not','and','or','import','from','as','with',
+     'try','except','finally','raise','lambda','yield','pass','break','continue','async','await','global','None',
+     'True','False','self','function','const','let','var','new','this','typeof','instanceof','export','default',
+     'interface','type','public','private','static','void','int','float','bool','string','struct','func','package',
+     'nil','null','undefined','true','false','switch','case','do','throw','extends','implements'
+    ].join('|') +
+    ')\\b',
+  'g'
+);
+
+const LITERALS =
+  /(#[^\n]*|\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`(?:\\.|[^`\\])*`)/g;
+
+function highlight(src) {
+  // Walk the source, styling comments and strings in place and highlighting
+  // only the code between them. An earlier version swapped literals for numeric
+  // placeholders, which the number rule then styled as numbers — so comments
+  // reappeared as stray digits. Segmenting avoids placeholders entirely.
+  let out = '';
+  let last = 0;
+  let m;
+  LITERALS.lastIndex = 0;
+  while ((m = LITERALS.exec(src)) !== null) {
+    out += highlightCode(src.slice(last, m.index));
+    out += `<span class="${m[1] ? 'tok-cm' : 'tok-str'}">${escapeHtml(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + highlightCode(src.slice(last));
+}
+
+function highlightCode(chunk) {
+  if (!chunk) return '';
+  return escapeHtml(chunk)
+    .replace(KEYWORDS, '<span class="tok-kw">$1</span>')
+    .replace(/\b(0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b/g, '<span class="tok-num">$1</span>')
+    .replace(/\b([A-Za-z_]\w*)(?=\s*\()/g, '<span class="tok-fn">$1</span>');
+}
+
 function renderInline(text) {
   const lines = text.split('\n');
   let html = '';
@@ -76,6 +122,7 @@ function thinkingHtml(reasoning) {
   return `<details class="thinking"><summary>Model's reasoning</summary><div>${renderMarkdown(reasoning)}</div></details>`;
 }
 window.__answerHtml = answerHtml; // test seam
+window.__renderMarkdown = renderMarkdown; // test seam
 
 // ---- Tabs ----
 function activateTab(name) {
@@ -270,6 +317,10 @@ async function refreshModels() {
   setStatus(`Models: ${okCount}/${results.length} online`);
 }
 $('#refreshModels').addEventListener('click', refreshModels);
+$('#browseCatalog').addEventListener('click', async () => {
+  const { url } = await window.clarity.openCatalog();
+  setStatus(`Opened ${url}`);
+});
 
 // ---- Top-bar buttons ----
 $('#quitBtn').addEventListener('click', () => window.clarity.quit());

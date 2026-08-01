@@ -14,5 +14,6 @@ contextBridge.exposeInMainWorld('clarity', {
   toggleContentProtection: (v) => ipcRenderer.invoke('clarity:contentProtection', v),
   addTranscript: (line) => ipcRenderer.invoke('clarity:addTranscript', line),
   quit: () => ipcRenderer.invoke('clarity:quit'),
+  openCatalog: () => ipcRenderer.invoke('clarity:openCatalog'),
   onHotkey: (cb) => ipcRenderer.on('clarity:hotkey', (_e, name) => cb(name))
 });

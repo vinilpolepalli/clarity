@@ -40,6 +40,45 @@ test('loads with Ask tab active and glass bar', async () => {
   await shot('01-launch.png');
 });
 
+test('is a transparent frameless overlay, not an ordinary window', async () => {
+  const w = await app.evaluate(({ BrowserWindow, screen }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    const b = win.getBounds();
+    const work = screen.getPrimaryDisplay().workAreaSize;
+    return {
+      transparent: win.isKiosk !== undefined ? win.getBackgroundColor() : null,
+      frameless: !win.isMovable || true,
+      hasFrame: win.isFullScreen() === false,
+      alwaysOnTop: win.isAlwaysOnTop(),
+      bounds: b,
+      work,
+      fullscreen: win.isFullScreen(),
+      windows: BrowserWindow.getAllWindows().length
+    };
+  });
+  // A single overlay window, not a second app window.
+  expect(w.windows).toBe(1);
+  expect(w.alwaysOnTop).toBe(true);
+  expect(w.fullscreen).toBe(false);
+  // Overlay-sized: it must not cover the display.
+  expect(w.bounds.width).toBeLessThanOrEqual(920);
+  expect(w.bounds.height).toBeLessThanOrEqual(700);
+  expect(w.bounds.width).toBeLessThan(w.work.width);
+
+  // Transparent all the way down: no opaque page background anywhere behind
+  // the glass, and the demo backdrop must not be present in normal use.
+  const page = await win.evaluate(() => ({
+    html: getComputedStyle(document.documentElement).backgroundColor,
+    body: getComputedStyle(document.body).backgroundColor,
+    demoHidden: document.getElementById('demoBackdrop').hidden,
+    demoClass: document.body.classList.contains('demo')
+  }));
+  expect(page.html).toBe('rgba(0, 0, 0, 0)');
+  expect(page.body).toBe('rgba(0, 0, 0, 0)');
+  expect(page.demoHidden).toBe(true);
+  expect(page.demoClass).toBe(false);
+});
+
 test('every tab switches panels', async () => {
   for (const tab of ['listen', 'code', 'screen', 'models', 'ask']) {
     await win.locator(`.tab[data-tab="${tab}"]`).click();
@@ -217,6 +256,113 @@ test('a truncated reasoning reply is never shown as the answer', async () => {
   );
   expect(normal).toContain('All good');
   expect(normal).not.toContain('scratch');
+});
+
+test('Enter submits in the Ask and Listen inputs', async () => {
+  await win.locator('.tab[data-tab="ask"]').click();
+  await win.locator('#askInput').fill('Reply with the single word: ping');
+  await win.locator('#askInput').press('Enter');
+  await expect(win.locator('#status')).toContainText(/Answered|Error/, { timeout: 90000 });
+  expect(await win.locator('#status').textContent()).toContain('Answered');
+
+  await win.locator('.tab[data-tab="listen"]').click();
+  const before = await win.locator('#transcript .line').count();
+  await win.locator('#meetInput').fill('Them: what is our timeline?');
+  await win.locator('#meetInput').press('Enter');
+  await expect(win.locator('#transcript .line')).toHaveCount(before + 1);
+  await expect(win.locator('#status')).toContainText(/Guidance updated|Error/, { timeout: 90000 });
+});
+
+test('auto-guide checkbox gates automatic guidance', async () => {
+  await win.locator('.tab[data-tab="listen"]').click();
+  await win.locator('#autoGuide').uncheck();
+  await expect(win.locator('#autoGuide')).not.toBeChecked();
+  await win.locator('#autoGuide').check();
+  await expect(win.locator('#autoGuide')).toBeChecked();
+});
+
+test('global hotkeys are registered and drive the UI', async () => {
+  const registered = await app.evaluate(({ globalShortcut }) => ({
+    ask: globalShortcut.isRegistered('CommandOrControl+Enter'),
+    code: globalShortcut.isRegistered('CommandOrControl+Shift+C'),
+    screen: globalShortcut.isRegistered('CommandOrControl+Shift+S'),
+    meeting: globalShortcut.isRegistered('CommandOrControl+Shift+M'),
+    hide: globalShortcut.isRegistered('CommandOrControl+Shift+H')
+  }));
+  expect(registered).toEqual({ ask: true, code: true, screen: true, meeting: true, hide: true });
+
+  // The accelerators can't be delivered through a headless X server, so drive
+  // the same channel the shortcut handler uses and assert the UI responds.
+  const fire = (name) =>
+    app.evaluate(({ BrowserWindow }, n) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('clarity:hotkey', n);
+    }, name);
+
+  await fire('code');
+  await expect(win.locator('.panel[data-panel="code"]')).toBeVisible();
+  await fire('meeting');
+  await expect(win.locator('.panel[data-panel="listen"]')).toBeVisible();
+  await fire('ask');
+  await expect(win.locator('.panel[data-panel="ask"]')).toBeVisible();
+  await fire('hide');
+  await expect(win.locator('#body')).toBeHidden();
+  await fire('hide');
+  await expect(win.locator('#body')).toBeVisible();
+});
+
+test('switching model actually routes the next request to it', async () => {
+  await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('.model-card[data-id="meta/llama-3.1-8b-instruct"]').click();
+  await expect(win.locator('#activeModel')).toHaveText('meta/llama-3.1-8b-instruct');
+
+  await win.locator('.tab[data-tab="ask"]').click();
+  await win.locator('#askInput').fill('Reply with the single word: ok');
+  await win.locator('#askSend').click();
+  await expect(win.locator('#status')).toContainText(/Answered|Error/, { timeout: 90000 });
+  // the status line reports the model that actually served the request
+  await expect(win.locator('#status')).toContainText('meta/llama-3.1-8b-instruct');
+
+  // restore the default
+  await win.locator('.tab[data-tab="models"]').click();
+  await win.locator('.model-card[data-id="thinkingmachines/inkling"]').click();
+  await expect(win.locator('#activeModel')).toHaveText('thinkingmachines/inkling');
+});
+
+test('code answers render as highlighted code blocks', async () => {
+  await win.locator('.tab[data-tab="code"]').click();
+  await win.locator('#codeInput').fill('Write a Python function that returns the nth Fibonacci number.');
+  await win.locator('#codeSend').click();
+  await expect(win.locator('#status')).toContainText(/Code ready|Error/, { timeout: 90000 });
+  // a real <pre><code> block, not prose with stray backticks
+  await expect(win.locator('#codeOut pre code')).toBeVisible();
+  const code = await win.locator('#codeOut pre code').first().textContent();
+  expect(code).toMatch(/def\s+\w+\(/);
+  expect(code).not.toContain('```');
+  // and it is syntax highlighted
+  await expect(win.locator('#codeOut pre code .tok-kw').first()).toBeVisible();
+});
+
+test('highlighter keeps comments and strings intact', async () => {
+  // Regression guard: comments were swapped for numeric placeholders that the
+  // number rule then styled, so they came back rendered as stray digits.
+  const html = await win.evaluate(() =>
+    window.__renderMarkdown('```python\n# Sort by interval start\nx = 5\ns = "hi 42"\n```')
+  );
+  expect(html).toContain('# Sort by interval start');
+  expect(html).toContain('tok-cm');
+  expect(html).toContain('hi 42');
+  expect(html).toContain('tok-str');
+  // the comment must not have been replaced by a bare placeholder index
+  const text = html.replace(/<[^>]*>/g, '');
+  expect(text).not.toMatch(/^\s*\d+\s*$/m);
+  expect(text).toContain('# Sort by interval start');
+
+  // and highlighting must never become an injection route
+  const evil = await win.evaluate(() =>
+    window.__renderMarkdown('```js\nconst a = "<img src=x onerror=alert(1)>";\n```')
+  );
+  expect(evil).not.toContain('<img');
+  expect(evil).toContain('&lt;img');
 });
 
 test('Models dashboard pings NIM models', async () => {

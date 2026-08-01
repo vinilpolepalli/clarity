@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, screen, shell } = require('electron');
 const path = require('path');
 const nim = require('./nim');
 const prompts = require('./prompts');
@@ -164,6 +164,13 @@ ipcMain.handle('clarity:clickThrough', (_e, v) => {
 });
 
 ipcMain.handle('clarity:quit', () => app.quit());
+
+// The full NIM catalogue lives on the web; the dashboard only pings a curated
+// subset, so give people a way to see everything that exists.
+ipcMain.handle('clarity:openCatalog', () => {
+  shell.openExternal(nim.CATALOG_URL);
+  return { url: nim.CATALOG_URL };
+});
 
 function registerHotkeys() {
   const map = {

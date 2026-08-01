@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>refraction probe</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #fff; width: 1000px; height: 600px; position: relative; }
+  /* A perfectly straight vertical line. If the glass truly refracts, this line
+     is displaced where it passes behind the panel's divergent edge zone. */
+  #line { position: absolute; top: 0; left: 340px; width: 3px; height: 600px; background: #000; }
+  #panel {
+    position: absolute; left: 300px; top: 150px; width: 400px; height: 300px;
+    background: rgba(255,255,255,0.02);
+    /* no blur — the line must stay sharp enough to measure */
+    backdrop-filter: url(#lgRefract);
+    -webkit-backdrop-filter: url(#lgRefract);
+  }
+  #flat { position: absolute; left: 300px; top: 150px; width: 400px; height: 300px; }
+  body.control #panel { backdrop-filter: none; -webkit-backdrop-filter: none; }
+</style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true"><defs>
+    <filter id="lgRefract" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feImage preserveAspectRatio="none" x="0" y="0" width="100%" height="100%" result="map"
+        href="data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'100'%20height%3D'100'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'x'%20x1%3D'0'%20x2%3D'1'%20y1%3D'0'%20y2%3D'0'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'rgb(0%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'0.22'%20stop-color%3D'rgb(128%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'0.78'%20stop-color%3D'rgb(128%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'rgb(255%2C0%2C0)'%2F%3E%3C%2FlinearGradient%3E%3ClinearGradient%20id%3D'y'%20x1%3D'0'%20x2%3D'0'%20y1%3D'0'%20y2%3D'1'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'rgb(0%2C0%2C0)'%2F%3E%3Cstop%20offset%3D'0.22'%20stop-color%3D'rgb(0%2C128%2C0)'%2F%3E%3Cstop%20offset%3D'0.78'%20stop-color%3D'rgb(0%2C128%2C0)'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'rgb(0%2C255%2C0)'%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D'100'%20height%3D'100'%20fill%3D'url(%23x)'%2F%3E%3Crect%20width%3D'100'%20height%3D'100'%20fill%3D'url(%23y)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3C%2Fsvg%3E" />
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="26" xChannelSelector="R" yChannelSelector="G" />
+    </filter>
+  </defs></svg>
+  <div id="line"></div>
+  <div id="panel"></div>
+</body>
+</html>

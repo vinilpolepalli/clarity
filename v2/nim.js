@@ -1,5 +1,7 @@
 // NVIDIA NIM client (OpenAI-compatible API at integrate.api.nvidia.com)
 const BASE = 'https://integrate.api.nvidia.com/v1';
+// Browsable catalogue of every model NIM offers.
+const CATALOG_URL = 'https://build.nvidia.com/models';
 
 const DEFAULT_MODEL = 'thinkingmachines/inkling';
 
@@ -22,8 +24,11 @@ function apiKey() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Exponential backoff with jitter: bursts of parallel calls (the model
+// dashboard pings eight at once) reliably trip NIM's rate limiter.
+const backoff = (attempt) => Math.min(1000 * 2 ** attempt, 12000) * (0.75 + Math.random() * 0.5);
 
-async function chat({ model = DEFAULT_MODEL, messages, maxTokens = 1024, temperature = 0.6, timeoutMs = 60000, retries = 2 }) {
+async function chat({ model = DEFAULT_MODEL, messages, maxTokens = 1024, temperature = 0.6, timeoutMs = 60000, retries = 4 }) {
   const started = Date.now();
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -40,7 +45,7 @@ async function chat({ model = DEFAULT_MODEL, messages, maxTokens = 1024, tempera
       // Retry transient rate-limit / server errors with backoff.
       if (res.status === 429 || res.status >= 500) {
         lastErr = new Error(`NIM ${res.status}`);
-        if (attempt < retries) { await sleep(800 * (attempt + 1)); continue; }
+        if (attempt < retries) { await sleep(backoff(attempt)); continue; }
         const body = await res.text();
         throw new Error(`NIM ${res.status}: ${body.slice(0, 300)}`);
       }
@@ -61,7 +66,7 @@ async function chat({ model = DEFAULT_MODEL, messages, maxTokens = 1024, tempera
       clearTimeout(timer);
       lastErr = e.name === 'AbortError' ? new Error(`NIM timeout after ${timeoutMs}ms`) : e;
       if (attempt < retries && (e.name === 'AbortError' || /NIM 5|NIM 429/.test(String(e.message)))) {
-        await sleep(800 * (attempt + 1));
+        await sleep(backoff(attempt));
         continue;
       }
       throw lastErr;
@@ -119,4 +124,4 @@ async function listRemoteModels() {
   return data.data.map((m) => m.id);
 }
 
-module.exports = { chat, pingModel, listRemoteModels, MODELS, DEFAULT_MODEL, VISION_MODEL };
+module.exports = { chat, pingModel, listRemoteModels, MODELS, DEFAULT_MODEL, VISION_MODEL, CATALOG_URL };
