@@ -163,6 +163,37 @@ ipcMain.handle('clarity:clickThrough', (_e, v) => {
   return { clickThrough: state.clickThrough };
 });
 
+// Liquid Glass adapts to what is behind it: light content gives light glass,
+// dark content dark. Sample a small thumbnail of the region under the overlay
+// and return its mean luminance so the renderer can adapt.
+ipcMain.handle('clarity:backdropLuma', async () => {
+  if (!win) return { luma: 0 };
+  const display = screen.getPrimaryDisplay();
+  const W = 192;
+  const H = Math.max(1, Math.round((display.size.height / display.size.width) * W));
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: W, height: H } });
+  const img = sources[0] && sources[0].thumbnail;
+  if (!img || img.isEmpty()) return { luma: 0 };
+  const { width, height } = img.getSize();
+  const bmp = img.getBitmap(); // BGRA
+  const b = win.getBounds();
+  const sx = Math.max(0, Math.floor((b.x / display.size.width) * width));
+  const sy = Math.max(0, Math.floor((b.y / display.size.height) * height));
+  const sw = Math.max(1, Math.floor((b.width / display.size.width) * width));
+  const sh = Math.max(1, Math.floor((b.height / display.size.height) * height));
+  let sum = 0;
+  let n = 0;
+  for (let y = sy; y < Math.min(sy + sh, height); y++) {
+    for (let x = sx; x < Math.min(sx + sw, width); x++) {
+      const i = (y * width + x) * 4;
+      // Rec. 709 luma from BGRA
+      sum += (0.2126 * bmp[i + 2] + 0.7152 * bmp[i + 1] + 0.0722 * bmp[i]) / 255;
+      n++;
+    }
+  }
+  return { luma: n ? sum / n : 0 };
+});
+
 ipcMain.handle('clarity:quit', () => app.quit());
 
 // The full NIM catalogue lives on the web; the dashboard only pings a curated

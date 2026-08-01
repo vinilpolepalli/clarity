@@ -10,6 +10,8 @@ test('quit button closes the app', async () => {
   await expect(win.locator('#quitBtn')).toBeVisible();
 
   const exited = new Promise((resolve) => app.process().once('exit', () => resolve(true)));
-  await win.locator('#quitBtn').click();
+  // The click destroys the page it was dispatched on, so Playwright's
+  // post-click bookkeeping can legitimately fail. The exit is the assertion.
+  await win.locator('#quitBtn').click({ noWaitAfter: true }).catch(() => {});
   await expect(Promise.race([exited, new Promise((r) => setTimeout(() => r(false), 15000))])).resolves.toBe(true);
 });

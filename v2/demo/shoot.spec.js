@@ -94,6 +94,28 @@ test('capture the gallery', async () => {
   await wait(/Models: \d+\/\d+ online/);
   await shoot('05-models.png');
 
+  // --- Adaptive material over a bright backdrop ---
+  // Swap the dark call for a white document; the luminance sampler should flip
+  // the glass light on its own, with no help from the harness.
+  await win.locator('.tab[data-tab="ask"]').click();
+  await win.evaluate(() => {
+    document.getElementById('demoBackdrop').src = '../demo/backdrop-light.html';
+  });
+  await win.waitForTimeout(1500);
+  await win.locator('#askInput').fill('Churn fell from 3.4% to 2.1% this quarter. Give me one line I can say about it.');
+  await win.locator('#askSend').click();
+  await wait(/Answered|Error/);
+  // give the 2.5s sampler a cycle to notice the bright backdrop
+  await win.waitForFunction(() => document.body.classList.contains('light-backdrop'), null, { timeout: 20000 })
+    .catch(() => {});
+  await shoot('07-adaptive-light.png');
+
+  // back to the dark call
+  await win.evaluate(() => {
+    document.getElementById('demoBackdrop').src = '../demo/backdrop.html';
+  });
+  await win.waitForTimeout(3500);
+
   // --- Collapsed pill (hidden body) ---
   await win.locator('.tab[data-tab="ask"]').click();
   await win.locator('#hideBtn').click();

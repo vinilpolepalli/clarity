@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('clarity', {
   addTranscript: (line) => ipcRenderer.invoke('clarity:addTranscript', line),
   quit: () => ipcRenderer.invoke('clarity:quit'),
   openCatalog: () => ipcRenderer.invoke('clarity:openCatalog'),
+  backdropLuma: () => ipcRenderer.invoke('clarity:backdropLuma'),
   onHotkey: (cb) => ipcRenderer.on('clarity:hotkey', (_e, name) => cb(name))
 });

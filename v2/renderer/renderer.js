@@ -356,6 +356,32 @@ window.clarity.onHotkey((name) => {
   else if (name === 'hide') { $('#hideBtn').click(); }
 });
 
+// ---- Adaptive material ----
+// Liquid Glass takes its cast from what sits behind it. Poll the mean luminance
+// under the overlay and flip the material light when the backdrop is bright, so
+// contrast holds over a white doc as well as a dark call.
+const LIGHT_ON = 0.62;  // hysteresis: separate thresholds stop it flickering
+const LIGHT_OFF = 0.52; // when the backdrop hovers around the boundary
+let lightBackdrop = false;
+
+async function sampleBackdrop() {
+  try {
+    const { luma } = await window.clarity.backdropLuma();
+    applyBackdropLuma(luma);
+  } catch {
+    /* capture unavailable — keep the current material */
+  }
+}
+function applyBackdropLuma(luma) {
+  if (!lightBackdrop && luma >= LIGHT_ON) lightBackdrop = true;
+  else if (lightBackdrop && luma <= LIGHT_OFF) lightBackdrop = false;
+  document.body.classList.toggle('light-backdrop', lightBackdrop);
+  return lightBackdrop;
+}
+window.__applyBackdropLuma = applyBackdropLuma; // test seam
+setInterval(sampleBackdrop, 2500);
+sampleBackdrop();
+
 // ---- Demo backdrop (screenshot harness) ----
 if (new URLSearchParams(location.search).get('demo')) {
   document.body.classList.add('demo');

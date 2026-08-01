@@ -365,6 +365,53 @@ test('highlighter keeps comments and strings intact', async () => {
   expect(evil).toContain('&lt;img');
 });
 
+test('corner radii stay concentric', async () => {
+  // Apple's rule for nested rounded rects: innerRadius = outerRadius - padding.
+  const g = await win.evaluate(() => {
+    const body = document.querySelector('.body');
+    const cs = getComputedStyle(body);
+    const px = (v) => parseFloat(v);
+    return {
+      outer: px(cs.borderTopLeftRadius),
+      pad: px(cs.paddingTop),
+      inner: px(getComputedStyle(document.querySelector('.out')).borderTopLeftRadius)
+    };
+  });
+  expect(g.inner).toBeCloseTo(g.outer - g.pad, 1);
+});
+
+test('material adapts to a bright backdrop and holds contrast', async () => {
+  const dark = await win.evaluate(() => {
+    window.__applyBackdropLuma(0.05);
+    return {
+      light: document.body.classList.contains('light-backdrop'),
+      text: getComputedStyle(document.body).color
+    };
+  });
+  expect(dark.light).toBe(false);
+
+  const bright = await win.evaluate(() => {
+    window.__applyBackdropLuma(0.9);
+    return {
+      light: document.body.classList.contains('light-backdrop'),
+      text: getComputedStyle(document.body).color
+    };
+  });
+  expect(bright.light).toBe(true);
+  // text must invert with the material, not stay white on a white panel
+  expect(bright.text).not.toBe(dark.text);
+
+  // hysteresis: a mid value must not flip it back and forth
+  const mid = await win.evaluate(() => {
+    window.__applyBackdropLuma(0.57);
+    return document.body.classList.contains('light-backdrop');
+  });
+  expect(mid).toBe(true);
+
+  await win.evaluate(() => window.__applyBackdropLuma(0.05));
+  await expect.poll(() => win.evaluate(() => document.body.classList.contains('light-backdrop'))).toBe(false);
+});
+
 test('Models dashboard pings NIM models', async () => {
   await win.locator('.tab[data-tab="models"]').click();
   await win.locator('#refreshModels').click();
