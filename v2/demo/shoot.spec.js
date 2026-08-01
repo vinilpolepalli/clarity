@@ -94,6 +94,20 @@ test('capture the gallery', async () => {
   await wait(/Models: \d+\/\d+ online/);
   await shoot('05-models.png');
 
+  // --- Glass theme, for comparison against the shaded default ---
+  await win.locator('.tab[data-tab="settings"]').click();
+  await win.locator('#themeSeg button[data-theme="glass"]').click();
+  await win.locator('.tab[data-tab="listen"]').click();
+  await shoot('08-theme-glass.png');
+  await win.locator('.tab[data-tab="settings"]').click();
+  await win.locator('#themeSeg button[data-theme="shaded"]').click();
+  await win.locator('.tab[data-tab="listen"]').click();
+  await shoot('09-theme-shaded.png');
+
+  // --- Settings ---
+  await win.locator('.tab[data-tab="settings"]').click();
+  await shoot('10-settings.png');
+
   // --- Adaptive material over a bright backdrop ---
   // Swap the dark call for a white document; the luminance sampler should flip
   // the glass light on its own, with no help from the harness.

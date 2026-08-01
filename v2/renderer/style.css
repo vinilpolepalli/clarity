@@ -42,13 +42,18 @@
      nesting correct if either value is ever retuned. */
   --pad: 12px;
   --radius: 26px;
-  --radius-inner: calc(var(--radius) - var(--pad));
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, sans-serif;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; background: transparent; color: var(--text); overflow: hidden; }
-body { -webkit-font-smoothing: antialiased; }
+body {
+  -webkit-font-smoothing: antialiased;
+  /* Declared here, not on :root: a var() inside a custom property resolves
+     against the element that declares it, so putting this on :root froze it at
+     the root's radius/padding and themes could never change it. */
+  --radius-inner: calc(var(--radius) - var(--pad));
+}
 
 #app { display: flex; flex-direction: column; height: 100vh; padding: 12px; gap: 11px; }
 
@@ -394,3 +399,74 @@ body.light-backdrop .tok-fn { color: #0369a1; }
   .listen-btn.recording, .status-dot.pending { animation: none; }
   * { transition-duration: 0.01ms !important; }
 }
+
+
+/* ---- Shaded theme (Cluely-style) ----
+   A flat dark scrim rather than heavy frosted glass: mostly opaque so text is
+   crisp, still translucent enough to keep the call visible behind it, and no
+   expensive refraction pass. This is the default. */
+body.theme-shaded {
+  --tint: rgba(12, 13, 17, 0.82);
+  --tint-strong: rgba(12, 13, 17, 0.86);
+  --refract: blur(6px) saturate(115%);
+  --refract-heavy: blur(6px) saturate(115%);
+  --rim:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  --float:
+    0 18px 44px rgba(0, 0, 0, 0.50),
+    0 3px 10px rgba(0, 0, 0, 0.32);
+  --radius: 18px;
+  --pad: 12px;
+}
+/* No sheen — the shaded look is deliberately flat. */
+body.theme-shaded .bar::before,
+body.theme-shaded .body::before,
+body.theme-shaded .statusbar::before { background: none; }
+body.theme-shaded .prompt,
+body.theme-shaded .out,
+body.theme-shaded .transcript,
+body.theme-shaded .model-card { background: rgba(255, 255, 255, 0.045); }
+body.theme-shaded .out pre { background: rgba(0, 0, 0, 0.42); }
+body.theme-shaded .tab.active {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+body.theme-shaded .send {
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+body.theme-shaded .send:hover { background: rgba(255, 255, 255, 0.22); }
+body.theme-shaded .icon-btn.on {
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+/* The shaded theme is already high-contrast; adapting it to a light backdrop
+   would undo the point, so it stays dark either way. */
+body.theme-shaded.light-backdrop {
+  --tint: rgba(12, 13, 17, 0.86);
+  --tint-strong: rgba(12, 13, 17, 0.90);
+  --text: rgba(255, 255, 255, 0.95);
+  --muted: rgba(255, 255, 255, 0.58);
+}
+body.theme-shaded.light-backdrop .prompt,
+body.theme-shaded.light-backdrop .out,
+body.theme-shaded.light-backdrop .transcript,
+body.theme-shaded.light-backdrop .model-card { background: rgba(255, 255, 255, 0.06); }
+
+/* ---- Settings ---- */
+.settings-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.settings-row label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); font-weight: 600; }
+.settings-row .help { font-size: 11.5px; color: var(--muted); font-style: italic; }
+.settings-actions { display: flex; gap: 9px; align-items: center; }
+.key-state { font-size: 12px; }
+.key-state.ok { color: var(--ok); }
+.key-state.bad { color: var(--bad); }
+.seg { display: flex; gap: 5px; }
+.seg button {
+  border: 0; cursor: pointer; font-size: 12px; font-weight: 550;
+  padding: 8px 14px; border-radius: 10px;
+  background: rgba(255,255,255,0.07); color: var(--muted);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09);
+}
+.seg button.on { background: rgba(255,255,255,0.2); color: var(--text); }

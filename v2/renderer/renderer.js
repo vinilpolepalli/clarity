@@ -134,6 +134,7 @@ function activateTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $$('.panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
   if (name === 'models') loadCatalog();
+  if (name === 'settings') loadSettings();
 }
 $$('.tab').forEach((t) => t.addEventListener('click', () => activateTab(t.dataset.tab)));
 
@@ -440,6 +441,63 @@ window.clarity.onHotkey((name) => {
   else if (name === 'hide') { $('#hideBtn').click(); }
 });
 
+// ---- Settings ----
+let cfg = { theme: 'shaded' };
+
+function applyTheme(theme) {
+  document.body.classList.toggle('theme-shaded', theme !== 'glass');
+  $$('#themeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.theme === theme));
+}
+
+function paintKeyState(hasKey, msg, kind) {
+  const el = $('#keyState');
+  el.textContent = msg || (hasKey ? 'Key saved.' : 'No API key yet — Ask, Code, Listen and Screen need one.');
+  el.className = 'key-state ' + (kind || (hasKey ? 'ok' : 'bad'));
+}
+
+async function loadSettings() {
+  cfg = await window.clarity.getConfig();
+  applyTheme(cfg.theme);
+  paintKeyState(cfg.hasKey);
+  $('#asrSeg').innerHTML = cfg.asrModels
+    .map((m) => `<button data-model="${m.id}"${m.id === cfg.asrModel ? ' class="on"' : ''}>${escapeHtml(m.label)} · ${m.mb} MB</button>`)
+    .join('');
+  $$('#asrSeg button').forEach((b) =>
+    b.addEventListener('click', async () => {
+      await window.clarity.setConfig({ asrModel: b.dataset.model });
+      $$('#asrSeg button').forEach((x) => x.classList.toggle('on', x === b));
+      $('#asrHelp').textContent = 'Saved. Restart Clarity for the speech model change to take effect.';
+    })
+  );
+  $('#diag').innerHTML = [
+    `Settings file: <code>${escapeHtml(cfg.configPath)}</code>`,
+    `Speech model: <code>${escapeHtml(cfg.asrModel)}</code>`,
+    `Platform: <code>${escapeHtml(navigator.platform)}</code> · ${navigator.hardwareConcurrency} cores`
+  ].join('<br>');
+}
+
+$$('#themeSeg button').forEach((b) =>
+  b.addEventListener('click', async () => {
+    applyTheme(b.dataset.theme);
+    await window.clarity.setConfig({ theme: b.dataset.theme });
+  })
+);
+
+$('#saveKey').addEventListener('click', async () => {
+  const key = $('#apiKeyInput').value.trim();
+  if (!key) return;
+  paintKeyState(false, 'Checking key…', '');
+  await window.clarity.setConfig({ apiKey: key });
+  const r = await window.clarity.testKey();
+  if (r.ok) {
+    paintKeyState(true, `Key works — verified against ${r.model}.`, 'ok');
+    $('#apiKeyInput').value = '';
+  } else {
+    paintKeyState(false, `Key rejected: ${r.error}`, 'bad');
+  }
+});
+$('#apiKeyInput').addEventListener('keydown', (e) => e.key === 'Enter' && $('#saveKey').click());
+
 // ---- Adaptive material ----
 // Liquid Glass takes its cast from what sits behind it. Poll the mean luminance
 // under the overlay and flip the material light when the backdrop is bright, so
@@ -476,6 +534,13 @@ if (new URLSearchParams(location.search).get('demo')) {
 (async function init() {
   try {
     const st = await window.clarity.getState();
+    const c = await window.clarity.getConfig();
+    applyTheme(c.theme);
+    if (!c.hasKey) {
+      // Nothing works without a key, so say so where they'll actually look.
+      $('#askOut').innerHTML =
+        '<div class="hint">No NVIDIA API key set. Open <b>Settings</b> to add one — it is stored locally on this machine.</div>';
+    }
     currentModel = st.model;
     stealth = st.contentProtection;
     $('#stealthBtn').classList.toggle('on', stealth);

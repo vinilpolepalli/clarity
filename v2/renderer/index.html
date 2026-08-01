@@ -38,6 +38,7 @@
         <button class="tab" data-tab="code" title="Code (Ctrl+Shift+C)">Code</button>
         <button class="tab" data-tab="screen" title="Screen (Ctrl+Shift+S)">Screen</button>
         <button class="tab" data-tab="models" title="Model dashboard">Models</button>
+        <button class="tab" data-tab="settings" title="Settings">Settings</button>
       </nav>
       <div class="bar-right">
         <button class="icon-btn on" id="stealthBtn" title="Undetectable: hidden from screen shares & recordings">🛡</button>
@@ -122,6 +123,38 @@
         </div>
         <div id="modelGrid" class="model-grid"><div class="hint">Click Refresh to ping every model.</div></div>
         <div class="active-model">Active model: <b id="activeModel">—</b></div>
+      </section>
+      <!-- SETTINGS -->
+      <section class="panel" data-panel="settings">
+        <div class="settings-row">
+          <label for="apiKeyInput">NVIDIA NIM API key</label>
+          <div class="prompt-row">
+            <input id="apiKeyInput" class="prompt" type="password" placeholder="nvapi-…" autocomplete="off" />
+            <button id="saveKey" class="send">Save</button>
+          </div>
+          <span class="help">Stored locally on this machine only. Get one free at build.nvidia.com.</span>
+          <span id="keyState" class="key-state"></span>
+        </div>
+
+        <div class="settings-row">
+          <label>Appearance</label>
+          <div class="seg" id="themeSeg">
+            <button data-theme="shaded">Shaded</button>
+            <button data-theme="glass">Glass</button>
+          </div>
+          <span class="help">Shaded is a flat translucent scrim. Glass adds blur and edge refraction.</span>
+        </div>
+
+        <div class="settings-row">
+          <label>Speech model</label>
+          <div class="seg" id="asrSeg"></div>
+          <span class="help" id="asrHelp">Runs on your machine. Larger is far more accurate in noise but slower.</span>
+        </div>
+
+        <div class="settings-row">
+          <label>Diagnostics</label>
+          <div id="diag" class="help">—</div>
+        </div>
       </section>
     </main>
 

@@ -12,6 +12,13 @@ A from-scratch rebuild of Clarity as a **Cluely-style undetectable AI meeting co
 | **Screen** | Screenshots your screen (`desktopCapturer`), downscales to JPEG, and reads it with a vision model to tell you what to do | Llama 3.2 Vision |
 | **Models** | Live dashboard of **every model your key can reach** (~100), filterable by name and kind, with cached health checks and latency. Click to switch the active model, or open the full catalogue at [build.nvidia.com/models](https://build.nvidia.com/models) | — |
 
+### Appearance
+
+Two looks, switchable in **Settings**:
+
+- **Shaded** (default) — a flat dark scrim, close to Cluely: mostly opaque so text stays crisp, still translucent enough to keep the call visible, and no expensive refraction pass.
+- **Glass** — heavier blur plus real edge refraction via an SVG displacement map (measured: 13px displacement of a straight line behind the panel).
+
 ### Undetectable
 
 This is an **OS-level window flag**, not a drawing trick. `setContentProtection(true)` maps to:
@@ -65,11 +72,34 @@ Weights are fetched once by `npm run setup` into `models/` (~42 MB) so the app t
 
 `inkling` is a reasoning model: it emits a scratchpad in `reasoning_content` and the real answer in `content`. If it exhausts its token budget while still thinking, `content` comes back empty. Clarity retries once with a larger budget, and **never renders the scratchpad as the answer** — partial notes are only reachable behind an explicit "Model's reasoning" disclosure.
 
-## Run
+## Install on a Mac
+
+**Prerequisite:** Node 18+ (`brew install node` if you don't have it).
 
 ```bash
-cd v2
-npm install        # postinstall fetches the Whisper weights and bundles the ASR worker
+git clone -b claude/clarity-v2-workspace-0pbbjy https://github.com/vinilpolepalli/clarity
+cd clarity/v2
+npm install          # pulls deps, bundles the ASR worker, downloads ~281 MB of Whisper weights
+npm start
+```
+
+Then open **Settings** and paste your NVIDIA NIM API key — it is stored locally in the app's own data directory, never in the repo. Get one free at [build.nvidia.com](https://build.nvidia.com/models). No environment variables needed; `NVIDIA_API_KEY` still works if you prefer it.
+
+macOS will ask for **Microphone** and **Screen Recording** the first time you use Listen and Screen. Both are required — the app is terminated by the OS if it asks without them.
+
+### Build a real .app
+
+```bash
+npm run package:mac
+```
+
+Produces `dist/Clarity-2.0.0-arm64.dmg` (and a `.zip`) — drag it to Applications like any other app. Built on your own machine, so there is no Gatekeeper quarantine to work around and no Developer ID needed. The bundle is ~580 MB, most of it the speech model weights.
+
+The app runs as a menu-bar-less agent (`LSUIElement`), so it has no Dock icon — quit with the ✕ on the overlay itself.
+
+### Run from source (any platform)
+
+```bash
 NVIDIA_API_KEY=nvapi-... npm start        # on Linux CI: prefix with `xvfb-run -a`
 ```
 

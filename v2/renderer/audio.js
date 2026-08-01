@@ -107,7 +107,11 @@ class AudioEngine {
 
   initWorker() {
     if (this.worker) return this.worker;
-    this.worker = new Worker('asr-worker.js', { type: 'module' });
+    const modelsPath = new URLSearchParams(location.search).get('models');
+    this.worker = new Worker(
+      'asr-worker.js' + (modelsPath ? `?models=${encodeURIComponent(modelsPath)}` : ''),
+      { type: 'module' }
+    );
     this.worker.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'ready') {

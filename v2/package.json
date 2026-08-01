@@ -1,7 +1,7 @@
 {
   "name": "clarity-v2",
   "version": "2.0.0",
-  "description": "Clarity v2 — undetectable AI meeting copilot (overlay assistant) powered by NVIDIA NIM",
+  "description": "Clarity v2 \u2014 undetectable AI meeting copilot (overlay assistant) powered by NVIDIA NIM",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -10,16 +10,106 @@
     "setup": "npm run fetch:model && npm run build:asr",
     "postinstall": "npm run setup",
     "start": "electron .",
-    "test": "playwright test --reporter=list"
+    "test": "playwright test --reporter=list",
+    "package:mac": "npm run setup && electron-builder --mac",
+    "package:mac:dir": "npm run setup && electron-builder --mac dir"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
     "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.1",
     "playwright": "^1.49.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "electron-audio-loopback": "^1.0.6"
-  }
+  },
+  "build": {
+    "appId": "com.clarity.overlay",
+    "productName": "Clarity",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "nim.js",
+      "asr.js",
+      "prompts.js",
+      "package.json",
+      "renderer/**/*",
+      "!renderer/asr-worker.src.js",
+      "node_modules/electron-audio-loopback/**/*",
+      "node_modules/@huggingface/transformers/dist/*.wasm",
+      "node_modules/@huggingface/transformers/dist/*.mjs",
+      "node_modules/@huggingface/transformers/package.json",
+      "!node_modules/@huggingface/transformers/.cache/**",
+      "!node_modules/@huggingface/transformers/{src,types}/**",
+      "!node_modules/@huggingface/transformers/dist/*.map",
+      "!node_modules/onnxruntime-node/**",
+      "!node_modules/onnxruntime-web/**",
+      "!node_modules/onnxruntime-common/**",
+      "!node_modules/protobufjs/**",
+      "!node_modules/@protobufjs/**",
+      "!node_modules/flatbuffers/**",
+      "!node_modules/sharp/**",
+      "!node_modules/@img/**",
+      "!node_modules/@types/**"
+    ],
+    "asarUnpack": [
+      "node_modules/@huggingface/transformers/dist/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Clarity listens to your meeting to transcribe it on-device and suggest replies.",
+        "NSCameraUsageDescription": "Clarity does not use the camera; this is required by the screen capture API.",
+        "NSAudioCaptureUsageDescription": "Clarity captures meeting audio so it can transcribe what other people say.",
+        "LSUIElement": true
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "extraResources": [
+      {
+        "from": "models",
+        "to": "models",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  },
+  "author": "Clarity"
 }

@@ -10,7 +10,9 @@ env.backends.onnx.wasm.wasmPaths = '../node_modules/@huggingface/transformers/di
 // scripts/fetch-model.js) so transcription works offline and starts instantly.
 env.allowRemoteModels = false;
 env.allowLocalModels = true;
-env.localModelPath = '../models/';
+// In a packaged build the weights ship as an extra resource next to the asar,
+// so the path differs from the checkout layout.
+env.localModelPath = new URLSearchParams(self.location.search).get('models') || '../models/';
 
 let MODEL = 'Xenova/whisper-small.en';
 let transcriber = null;

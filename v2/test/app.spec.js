@@ -80,7 +80,7 @@ test('is a transparent frameless overlay, not an ordinary window', async () => {
 });
 
 test('every tab switches panels', async () => {
-  for (const tab of ['listen', 'code', 'screen', 'models', 'ask']) {
+  for (const tab of ['listen', 'code', 'screen', 'models', 'settings', 'ask']) {
     await win.locator(`.tab[data-tab="${tab}"]`).click();
     await win.waitForTimeout(150);
     await expect(win.locator(`.panel[data-panel="${tab}"]`)).toBeVisible();
@@ -371,22 +371,31 @@ test('highlighter keeps comments and strings intact', async () => {
   expect(evil).toContain('&lt;img');
 });
 
-test('corner radii stay concentric', async () => {
+test('corner radii stay concentric in every theme', async () => {
   // Apple's rule for nested rounded rects: innerRadius = outerRadius - padding.
-  const g = await win.evaluate(() => {
-    const body = document.querySelector('.body');
-    const cs = getComputedStyle(body);
-    const px = (v) => parseFloat(v);
-    return {
-      outer: px(cs.borderTopLeftRadius),
-      pad: px(cs.paddingTop),
-      inner: px(getComputedStyle(document.querySelector('.out')).borderTopLeftRadius)
-    };
-  });
-  expect(g.inner).toBeCloseTo(g.outer - g.pad, 1);
+  // Themes change the radius and padding, so concentricity must survive both.
+  for (const theme of ['shaded', 'glass']) {
+    const g = await win.evaluate((t) => {
+      document.body.classList.toggle('theme-shaded', t !== 'glass');
+      const body = document.querySelector('.body');
+      const cs = getComputedStyle(body);
+      const px = (v) => parseFloat(v);
+      return {
+        outer: px(cs.borderTopLeftRadius),
+        pad: px(cs.paddingTop),
+        inner: px(getComputedStyle(document.querySelector('.out')).borderTopLeftRadius)
+      };
+    }, theme);
+    expect(g.inner, `${theme}: inner ${g.inner} vs outer ${g.outer} - pad ${g.pad}`).toBeCloseTo(g.outer - g.pad, 1);
+  }
+  await win.evaluate(() => document.body.classList.add('theme-shaded'));
 });
 
 test('material adapts to a bright backdrop and holds contrast', async () => {
+  // Adaptation applies to the glass theme. The shaded theme is a dark scrim by
+  // design and stays dark over light content — white on a dark scrim is already
+  // legible, and flipping it would make it a different design.
+  await win.evaluate(() => document.body.classList.remove('theme-shaded'));
   const dark = await win.evaluate(() => {
     window.__applyBackdropLuma(0.05);
     return {
@@ -416,6 +425,58 @@ test('material adapts to a bright backdrop and holds contrast', async () => {
 
   await win.evaluate(() => window.__applyBackdropLuma(0.05));
   await expect.poll(() => win.evaluate(() => document.body.classList.contains('light-backdrop'))).toBe(false);
+
+  // The shaded theme still detects the bright backdrop, it just keeps its scrim.
+  await win.evaluate(() => {
+    document.body.classList.add('theme-shaded');
+    window.__applyBackdropLuma(0.9);
+  });
+  const shaded = await win.evaluate(() => ({
+    detected: document.body.classList.contains('light-backdrop'),
+    text: getComputedStyle(document.body).color
+  }));
+  expect(shaded.detected).toBe(true);
+  expect(shaded.text).toBe('rgba(255, 255, 255, 0.95)');
+  await win.evaluate(() => window.__applyBackdropLuma(0.05));
+});
+
+test('settings persist the key, theme and speech model', async () => {
+  await win.locator('.tab[data-tab="settings"]').click();
+
+  // Shaded (Cluely-style) is the default appearance.
+  await expect.poll(() => win.evaluate(() => document.body.classList.contains('theme-shaded'))).toBe(true);
+  const shadedBlur = await win.evaluate(() => getComputedStyle(document.querySelector('.body')).backdropFilter);
+
+  await win.locator('#themeSeg button[data-theme="glass"]').click();
+  await expect.poll(() => win.evaluate(() => document.body.classList.contains('theme-shaded'))).toBe(false);
+  const glassBlur = await win.evaluate(() => getComputedStyle(document.querySelector('.body')).backdropFilter);
+  // Glass genuinely refracts; shaded deliberately does not.
+  expect(glassBlur).toContain('lgRefract');
+  expect(shadedBlur).not.toContain('lgRefract');
+
+  await win.locator('#themeSeg button[data-theme="shaded"]').click();
+  await expect.poll(() => win.evaluate(() => document.body.classList.contains('theme-shaded'))).toBe(true);
+
+  // Choice survives a reload — it is written to disk, not just to the DOM.
+  await win.reload();
+  await win.waitForTimeout(600);
+  await expect.poll(() => win.evaluate(() => document.body.classList.contains('theme-shaded'))).toBe(true);
+
+  await win.locator('.tab[data-tab="settings"]').click();
+  await expect(win.locator('#asrSeg button')).toHaveCount(3);
+  await expect(win.locator('#asrSeg button.on')).toHaveCount(1);
+  await expect(win.locator('#diag')).toContainText('Settings file');
+});
+
+test('a bad API key is rejected rather than silently saved', async () => {
+  await win.locator('.tab[data-tab="settings"]').click();
+  await win.locator('#apiKeyInput').fill('nvapi-obviously-not-a-real-key');
+  await win.locator('#saveKey').click();
+  await expect(win.locator('#keyState')).toContainText(/rejected/i, { timeout: 60000 });
+  await expect(win.locator('#keyState')).toHaveClass(/bad/);
+
+  // restore the working key so the rest of the suite still has one
+  await win.evaluate((k) => window.clarity.setConfig({ apiKey: k }), process.env.NVIDIA_API_KEY);
 });
 
 test('Models dashboard lists the live catalogue and health-checks it', async () => {

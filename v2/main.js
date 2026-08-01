@@ -67,8 +67,63 @@ function createWindow() {
   win.setContentProtection(state.contentProtection);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (process.platform === 'darwin' && app.dock) app.dock.hide();
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), demo ? { search: 'demo=1' } : {});
+  // Packaged builds keep the weights in resources/models; a checkout has them
+  // alongside the source. Tell the renderer which layout it is running in.
+  const search = [
+    demo ? 'demo=1' : '',
+    app.isPackaged ? `models=${encodeURIComponent(path.join(process.resourcesPath, 'models') + '/')}` : ''
+  ].filter(Boolean).join('&');
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), search ? { search } : {});
 }
+
+// ---- Local config ----
+// An API key in an environment variable is fine for a terminal, useless for an
+// app you double-click. Persist settings next to the app's own data instead.
+const configPath = () => path.join(app.getPath('userData'), 'config.json');
+let config = {};
+function loadConfig() {
+  try { config = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { config = {}; }
+  // An env var still wins, so existing shell workflows keep working.
+  if (!process.env.NVIDIA_API_KEY && config.apiKey) process.env.NVIDIA_API_KEY = config.apiKey;
+  if (!process.env.CLARITY_ASR_MODEL && config.asrModel) process.env.CLARITY_ASR_MODEL = config.asrModel;
+}
+function saveConfig() {
+  try {
+    fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+    fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
+  } catch (e) { console.warn('Could not save config:', e.message); }
+}
+
+ipcMain.handle('clarity:getConfig', () => ({
+  hasKey: !!process.env.NVIDIA_API_KEY,
+  keyFromEnv: !!config.apiKey === false && !!process.env.NVIDIA_API_KEY,
+  theme: config.theme || 'shaded',
+  asrModel: asr.model(),
+  asrModels: asr.MODELS,
+  configPath: configPath()
+}));
+
+ipcMain.handle('clarity:setConfig', (_e, patch) => {
+  config = { ...config, ...patch };
+  if (patch.apiKey !== undefined) process.env.NVIDIA_API_KEY = patch.apiKey;
+  if (patch.asrModel !== undefined) process.env.CLARITY_ASR_MODEL = patch.asrModel;
+  saveConfig();
+  return { ok: true, hasKey: !!process.env.NVIDIA_API_KEY };
+});
+
+// Verify a key actually works rather than just saving whatever was pasted.
+ipcMain.handle('clarity:testKey', async () => {
+  try {
+    const r = await nim.chat({
+      model: nim.FALLBACK_MODEL,
+      messages: [{ role: 'user', content: 'ok' }],
+      maxTokens: 4, timeoutMs: 20000, retries: 0
+    });
+    return { ok: true, model: r.model };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e).slice(0, 160) };
+  }
+});
 
 // ---- IPC ----
 ipcMain.handle('clarity:getState', () => ({
@@ -286,6 +341,7 @@ function registerHotkeys() {
 }
 
 app.whenReady().then(() => {
+  loadConfig();
   loadHealth();
   createWindow();
   registerHotkeys();
