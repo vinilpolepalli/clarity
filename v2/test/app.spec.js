@@ -468,6 +468,24 @@ test('settings persist the key, theme and speech model', async () => {
   await expect(win.locator('#diag')).toContainText('Settings file');
 });
 
+test('the default theme never polls the screen', async () => {
+  // Adaptation needs desktopCapturer on a timer, which holds the macOS Screen
+  // Recording permission open and can keep a recording indicator lit — the
+  // opposite of what an undetectable overlay wants. Shaded ignores luminance,
+  // so it must not sample at all.
+  await win.locator('.tab[data-tab="settings"]').click();
+  await win.locator('#themeSeg button[data-theme="shaded"]').click();
+  await expect.poll(() => win.evaluate(() => window.__isSampling())).toBe(false);
+
+  await win.locator('#themeSeg button[data-theme="glass"]').click();
+  await expect.poll(() => win.evaluate(() => window.__isSampling())).toBe(true);
+
+  await win.locator('#themeSeg button[data-theme="shaded"]').click();
+  await expect.poll(() => win.evaluate(() => window.__isSampling())).toBe(false);
+  // and switching away drops any adapted state rather than leaving it stuck
+  await expect.poll(() => win.evaluate(() => document.body.classList.contains('light-backdrop'))).toBe(false);
+});
+
 test('a bad API key is rejected rather than silently saved', async () => {
   await win.locator('.tab[data-tab="settings"]').click();
   await win.locator('#apiKeyInput').fill('nvapi-obviously-not-a-real-key');

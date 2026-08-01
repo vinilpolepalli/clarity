@@ -17,7 +17,11 @@ A from-scratch rebuild of Clarity as a **Cluely-style undetectable AI meeting co
 Two looks, switchable in **Settings**:
 
 - **Shaded** (default) — a flat dark scrim, close to Cluely: mostly opaque so text stays crisp, still translucent enough to keep the call visible, and no expensive refraction pass.
-- **Glass** — heavier blur plus real edge refraction via an SVG displacement map (measured: 13px displacement of a straight line behind the panel).
+- **Glass** — heavier blur plus real edge refraction via an SVG displacement map (measured: 13px displacement of a straight line behind the panel), and a material that adapts light/dark to whatever is behind it.
+
+Adaptation requires sampling the screen on a timer. The CPU cost is trivial (~11 ms, under 1% duty cycle) but the *surface area* is not: it holds the macOS Screen Recording permission open continuously and can keep a recording indicator lit — the opposite of what an undetectable overlay wants. So **only the glass theme samples**. On the default shaded theme the app touches the screen solely when you press Capture + Analyze, and a test enforces that.
+
+Glass is honestly labelled: it is an emulation. Apple's real Liquid Glass (`.glassEffect()`, `NSGlassEffectView`) is native-only and unreachable from Electron at any version.
 
 ### Undetectable
 

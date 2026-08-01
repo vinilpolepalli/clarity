@@ -445,8 +445,12 @@ window.clarity.onHotkey((name) => {
 let cfg = { theme: 'shaded' };
 
 function applyTheme(theme) {
-  document.body.classList.toggle('theme-shaded', theme !== 'glass');
+  const glass = theme === 'glass';
+  document.body.classList.toggle('theme-shaded', !glass);
   $$('#themeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.theme === theme));
+  // Only the glass material adapts to what is behind it, so only it pays for
+  // the screen sampling that adaptation requires.
+  if (typeof setAdaptiveSampling === 'function') setAdaptiveSampling(glass);
 }
 
 function paintKeyState(hasKey, msg, kind) {
@@ -514,6 +518,27 @@ async function sampleBackdrop() {
     /* capture unavailable — keep the current material */
   }
 }
+
+// Sampling means calling desktopCapturer on a timer. The CPU cost is trivial
+// (~11ms, well under 1% duty cycle) but the surface area is not: it holds the
+// macOS Screen Recording permission open continuously and can keep a recording
+// indicator lit — precisely what an overlay meant to be undetectable should not
+// do. The shaded theme ignores luminance entirely, so it never samples. By
+// default the app therefore touches the screen only when you press
+// Capture + Analyze.
+let lumaTimer = null;
+function setAdaptiveSampling(on) {
+  if (on && !lumaTimer) {
+    lumaTimer = setInterval(sampleBackdrop, 2500);
+    sampleBackdrop();
+  } else if (!on && lumaTimer) {
+    clearInterval(lumaTimer);
+    lumaTimer = null;
+    document.body.classList.remove('light-backdrop');
+    lightBackdrop = false;
+  }
+}
+window.__isSampling = () => lumaTimer !== null; // test seam
 function applyBackdropLuma(luma) {
   if (!lightBackdrop && luma >= LIGHT_ON) lightBackdrop = true;
   else if (lightBackdrop && luma <= LIGHT_OFF) lightBackdrop = false;
@@ -521,8 +546,6 @@ function applyBackdropLuma(luma) {
   return lightBackdrop;
 }
 window.__applyBackdropLuma = applyBackdropLuma; // test seam
-setInterval(sampleBackdrop, 2500);
-sampleBackdrop();
 
 // ---- Demo backdrop (screenshot harness) ----
 if (new URLSearchParams(location.search).get('demo')) {
